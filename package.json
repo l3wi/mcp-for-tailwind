@@ -1,6 +1,6 @@
 {
   "name": "mcp-for-tailwind",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP (Model Context Protocol) server for Tailwind Plus UI components - enables LLM-assisted development with licensed components",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",

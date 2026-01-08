@@ -22,7 +22,7 @@ function createVariantFetcher() {
 // Create and configure an MCP server instance
 function createMcpServer(): McpServer {
   const server = new McpServer(
-    { name: "mcp-for-tailwind", version: "0.1.0" },
+    { name: "mcp-for-tailwind", version: "0.2.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -666,7 +666,7 @@ app.get("/health", (c) => {
   return c.json({
     status: "ok",
     server: "mcp-for-tailwind",
-    version: "0.1.0",
+    version: "0.2.0",
     authenticated: authState.isAuthenticated,
     cache: {
       totalVariants: stats.totalVariants,
@@ -679,7 +679,7 @@ app.get("/health", (c) => {
 app.get("/", (c) => {
   return c.json({
     name: "mcp-for-tailwind",
-    version: "0.1.0",
+    version: "0.2.0",
     description: "MCP server for Tailwind Plus UI components with variant-level access",
     endpoints: {
       mcp: "/mcp",
@@ -705,7 +705,7 @@ export default app;
 export async function startServer(port = 3000) {
   const { serve } = await import("@hono/node-server");
 
-  console.log(`mcp-for-tailwind v0.1.0`);
+  console.log(`mcp-for-tailwind v0.2.0`);
   console.log(`Running on http://localhost:${port}`);
   console.log(`MCP endpoint: http://localhost:${port}/mcp`);
   console.log("");

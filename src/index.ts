@@ -20,7 +20,7 @@ const command = args[0];
 
 function printHelp() {
   console.log(`
-mcp-for-tailwind v0.1.0 - MCP Server for Tailwind Plus
+mcp-for-tailwind v0.2.0 - MCP Server for Tailwind Plus
 
 USAGE:
   mcp-for-tailwind                    Start MCP server (stdio transport)
