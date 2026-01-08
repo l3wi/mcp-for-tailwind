@@ -1,0 +1,54 @@
+{
+  "name": "mcp-for-tailwind",
+  "version": "0.1.0",
+  "description": "MCP (Model Context Protocol) server for Tailwind Plus UI components - enables LLM-assisted development with licensed components",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": [
+    "tailwind",
+    "tailwindcss",
+    "tailwind-plus",
+    "tailwind-ui",
+    "mcp",
+    "model-context-protocol",
+    "cli",
+    "components",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "mcp-for-tailwind": "./build/index.js"
+  },
+  "main": "./build/index.js",
+  "exports": {
+    ".": "./build/index.js"
+  },
+  "files": [
+    "build",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir=build --target=node --packages=external && node -e \"const fs=require('fs');const f='build/index.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!')){fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c)}\"",
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@hono/mcp": "^0.2.3",
+    "@hono/node-server": "^1.14.1",
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "hono": "^4.11.3",
+    "@puppeteer/browsers": "^2.10.5",
+    "puppeteer-core": "^24.34.0",
+    "zod": "^4.3.5"
+  }
+}

@@ -1,0 +1,36 @@
+# Source files (only distribute built output)
+src/
+tsconfig.json
+bun.lock
+
+# Development files
+.cursor/
+.claude/
+docs/
+CLAUDE.md
+
+# Build artifacts
+*.tsbuildinfo
+.cache/
+
+# Test files
+*.test.ts
+*.spec.ts
+__tests__/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local env files
+.env
+.env.*
