@@ -61,6 +61,20 @@ mcp-for-tailwind sync-catalog
 | `get_variant` | Fetch component code (React, Vue, or HTML) |
 | `search` | Search across all components |
 | `suggest` | Get context-aware component suggestions |
+| `check_status` | Check auth, catalog, and cache status |
+| `login` | Launch browser for Tailwind Plus authentication |
+
+### Authentication
+
+The `get_variant` tool requires authentication. If you haven't logged in, the AI can use the `check_status` tool to diagnose the issue and the `login` tool to launch a browser for authentication.
+
+```
+AI: Let me check your Tailwind Plus status...
+    → check_status returns: "not_logged_in"
+AI: You need to log in. I'll open a browser for you...
+    → login opens browser, waits for you to authenticate
+AI: Great, you're logged in! Now I can fetch that hero component...
+```
 
 ## CLI Commands
 

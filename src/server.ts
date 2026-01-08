@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPTransport } from "@hono/mcp";
 import { z } from "zod";
 import type { Context, CodeFormat, Theme, TailwindVersion } from "./types/index.ts";
-import { getBrowser, setupPage, checkAuthState } from "./browser/browser.ts";
+import { getBrowser, setupPage, checkAuthState, login } from "./browser/browser.ts";
 import { VariantFetcher } from "./browser/variant-fetcher.ts";
 import { CatalogManager } from "./data/catalog-manager.ts";
 import { CacheManager } from "./cache/cache-manager.ts";
@@ -210,7 +210,7 @@ Use these variant slugs with get_variant to fetch code.`,
       description: `Fetch the full source code for a specific variant.
 
 AUTHENTICATION: Requires valid Tailwind Plus subscription.
-Run: bun run src/index.ts login
+If not authenticated, use the 'login' tool to open a browser for authentication.
 
 PARAMETERS:
 - category: "marketing", "application-ui", or "ecommerce"
@@ -241,7 +241,8 @@ Code is cached for 7 days after first fetch.`,
               text: JSON.stringify(
                 {
                   error: "AUTH_REQUIRED",
-                  message: "Not authenticated. Run: bun run src/index.ts login",
+                  message: "Authentication required to fetch component code.",
+                  action: "Use the 'login' tool to open a browser and authenticate with your Tailwind Plus account.",
                   cookiesExist: authState.cookiesExist,
                   cookiesExpired: authState.cookiesExpired,
                 },
@@ -477,6 +478,172 @@ Helps find complementary components.`,
     }
   );
 
+  // Tool 7: check_status
+  server.registerTool(
+    "check_status",
+    {
+      title: "Check Status",
+      description: `Check authentication status, catalog availability, and cache statistics.
+
+Use this tool to diagnose issues or verify the system is ready to fetch components.
+
+RETURNS:
+- authentication: Login status and guidance if action needed
+- catalog: Whether component metadata is synced
+- cache: Number of cached variants and storage used`,
+      inputSchema: {},
+    },
+    async () => {
+      const authState = checkAuthState();
+      const catalogStats = catalogManager.getEnhancedStats();
+      const cacheStats = cacheManager.getVariantStats();
+
+      // Determine auth status and action
+      let authStatus: "authenticated" | "expired" | "not_logged_in";
+      let authAction: string | undefined;
+
+      if (authState.isAuthenticated) {
+        authStatus = "authenticated";
+      } else if (authState.cookiesExpired) {
+        authStatus = "expired";
+        authAction = "Use the 'login' tool to re-authenticate.";
+      } else {
+        authStatus = "not_logged_in";
+        authAction = "Use the 'login' tool to authenticate with your Tailwind Plus account.";
+      }
+
+      const result = {
+        authentication: {
+          status: authStatus,
+          lastLoginAt: authState.lastLoginAt ? new Date(authState.lastLoginAt).toISOString() : undefined,
+          action: authAction,
+        },
+        catalog: {
+          status: catalogStats ? "synced" : "not_synced",
+          totalBlocks: catalogStats?.totalBlocks ?? 0,
+          totalVariants: catalogStats?.totalVariants ?? 0,
+          action: catalogStats ? undefined : "Run CLI: bun run src/index.ts sync-catalog",
+        },
+        cache: {
+          totalCachedVariants: cacheStats.totalVariants,
+          sizeBytes: cacheStats.totalSize,
+        },
+      };
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  // Tool 8: login
+  server.registerTool(
+    "login",
+    {
+      title: "Login to Tailwind Plus",
+      description: `Launch a browser window for Tailwind Plus authentication.
+
+IMPORTANT: This opens a visible browser window. The user must be present at the machine to complete login.
+
+FLOW:
+1. Browser opens to Tailwind Plus login page
+2. User logs in with their credentials
+3. Browser closes automatically after successful login
+4. Cookies are saved for future requests
+
+TIMEOUT: 5 minutes to complete login.`,
+      inputSchema: {},
+    },
+    async () => {
+      // Check if already authenticated
+      const authState = checkAuthState();
+      if (authState.isAuthenticated) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "already_authenticated",
+                  message: "Already logged in to Tailwind Plus.",
+                  lastLoginAt: authState.lastLoginAt ? new Date(authState.lastLoginAt).toISOString() : undefined,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      try {
+        // Launch browser for login
+        await login();
+
+        // Verify login succeeded
+        const newAuthState = checkAuthState();
+        if (newAuthState.isAuthenticated) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(
+                  {
+                    status: "success",
+                    message: "Successfully logged in to Tailwind Plus!",
+                    nextSteps: [
+                      "Use 'list_categories' to browse available components",
+                      "Use 'search' to find specific components",
+                      "Use 'get_variant' to fetch component code",
+                    ],
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(
+                  {
+                    status: "failed",
+                    message: "Login was not completed. Please try again.",
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+            isError: true,
+          };
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "error",
+                  message: `Login failed: ${message}`,
+                  hint: "Ensure you have a browser installed and are at the machine to complete login.",
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -525,6 +692,8 @@ app.get("/", (c) => {
       "get_variant",
       "search",
       "suggest",
+      "check_status",
+      "login",
     ],
   });
 });
