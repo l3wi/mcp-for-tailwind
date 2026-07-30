@@ -37,6 +37,7 @@ import {
   DEFAULT_THEME,
   PACKAGE_VERSION,
 } from "./config.ts";
+import { agentEnvelope, defaultPaths, jsonResult } from "./agent-response.ts";
 
 const catalogManager = new CatalogManager();
 const cacheManager = new CacheManager();
@@ -273,25 +274,28 @@ Code is cached 7 days.`,
     }) => {
       const authState = checkAuthState();
       if (!authState.isAuthenticated) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  error: "AUTH_REQUIRED",
-                  message: "Authentication required to fetch component code.",
-                  action: "Use the 'login' tool to authenticate with your Tailwind Plus account.",
-                  cookiesExist: authState.cookiesExist,
-                  cookiesExpired: authState.cookiesExpired,
-                },
-                null,
-                2
-              ),
+        return jsonResult(
+          agentEnvelope({
+            summary: "Cannot fetch UI block code: not authenticated with Tailwind Plus.",
+            errors: ["AUTH_REQUIRED"],
+            nextSteps: [
+              {
+                action: "Open browser login for Tailwind Plus",
+                tool: "login",
+                detail: "User must complete login in the browser; cookies save to ~/.tailwind-plus-mcp/cookies.json",
+              },
+              {
+                action: "Retry get_variant with the same arguments",
+                tool: "get_variant",
+              },
+            ],
+            data: {
+              cookiesExist: authState.cookiesExist,
+              cookiesExpired: authState.cookiesExpired,
             },
-          ],
-          isError: true,
-        };
+          }),
+          true
+        );
       }
 
       const cached = await cacheManager.getVariant(
@@ -304,31 +308,38 @@ Code is cached 7 days.`,
       );
 
       if (cached) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  block: cached.blockSlug,
-                  variant: cached.variantSlug,
-                  variantName: cached.variantName,
-                  format: cached.format,
-                  version: cached.version,
-                  resolvedVersion: cached.resolvedVersion,
-                  theme: cached.theme,
-                  code: cached.code,
-                  dependencies: cached.dependencies,
-                  notes: cached.notes,
-                  cached: true,
-                  cachedAt: cached.cachedAt,
-                },
-                null,
-                2
-              ),
+        return jsonResult(
+          agentEnvelope({
+            summary: `Returned cached ${cached.format} code for ${category}/${blockSlug}/${variantSlug} (theme=${cached.theme}, version=${cached.resolvedVersion || cached.version}).`,
+            data: {
+              block: cached.blockSlug,
+              variant: cached.variantSlug,
+              variantName: cached.variantName,
+              format: cached.format,
+              version: cached.version,
+              resolvedVersion: cached.resolvedVersion,
+              theme: cached.theme,
+              code: cached.code,
+              dependencies: cached.dependencies,
+              notes: cached.notes,
+              cached: true,
+              cachedAt: cached.cachedAt,
             },
-          ],
-        };
+            paths: {
+              ...defaultPaths(),
+              thisCacheFile: `~/.tailwind-plus-mcp/cache/${category}--${blockSlug}--${variantSlug}--${format}--${theme}--${version}.json`,
+            },
+            nextSteps: [
+              {
+                action: "Paste or adapt the code into the user project",
+                detail: "Install listed dependencies if missing (e.g. @headlessui/react, @heroicons/react).",
+              },
+              ...(cached.notes?.length
+                ? [{ action: "Honor notes", detail: cached.notes.join(" | ") }]
+                : []),
+            ],
+          })
+        );
       }
 
       const blocks = catalogManager.getBlocks(category as Context);
@@ -380,36 +391,55 @@ Code is cached 7 days.`,
 
         await cacheManager.setVariant(code);
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  block: code.blockSlug,
-                  variant: code.variantSlug,
-                  variantName: code.variantName,
-                  format: code.format,
-                  version: code.version,
-                  resolvedVersion: code.resolvedVersion,
-                  theme: code.theme,
-                  code: code.code,
-                  dependencies: code.dependencies,
-                  notes: code.notes,
-                  cached: false,
-                },
-                null,
-                2
-              ),
+        return jsonResult(
+          agentEnvelope({
+            summary: `Fetched fresh ${code.format} code for ${category}/${blockSlug}/${variantSlug} from Tailwind Plus (theme=${code.theme}, resolvedVersion=${code.resolvedVersion || code.version}). Cached for 7 days.`,
+            data: {
+              block: code.blockSlug,
+              variant: code.variantSlug,
+              variantName: code.variantName,
+              format: code.format,
+              version: code.version,
+              resolvedVersion: code.resolvedVersion,
+              theme: code.theme,
+              code: code.code,
+              dependencies: code.dependencies,
+              notes: code.notes,
+              cached: false,
             },
-          ],
-        };
+            paths: {
+              ...defaultPaths(),
+              thisCacheFile: `~/.tailwind-plus-mcp/cache/${category}--${blockSlug}--${variantSlug}--${format}--${theme}--${version}.json`,
+            },
+            nextSteps: [
+              {
+                action: "Write the code into the appropriate project file",
+                detail: "Match the requested format (react/vue/html). Install dependencies listed in data.dependencies.",
+              },
+              ...(code.notes?.length
+                ? [{ action: "Read data.notes", detail: code.notes.join(" | ") }]
+                : []),
+            ],
+          })
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: message }, null, 2) }],
-          isError: true,
-        };
+        return jsonResult(
+          agentEnvelope({
+            summary: `Failed to fetch variant code: ${message}`,
+            errors: [message],
+            nextSteps: [
+              { action: "Call check_status", tool: "check_status" },
+              { action: "If auth expired, call login", tool: "login" },
+              {
+                action: "Confirm block/variant slugs",
+                tool: "list_variants",
+                detail: `category=${category} block=${blockSlug}`,
+              },
+            ],
+          }),
+          true
+        );
       }
     }
   );
@@ -745,14 +775,36 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
       inputSchema: {},
     },
     async () => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(getCatalystSetupGuide(), null, 2),
+      const guide = getCatalystSetupGuide();
+      return jsonResult(
+        agentEnvelope({
+          summary:
+            "Catalyst Getting Started guide loaded (public docs). Source still requires licensed zip download.",
+          data: guide,
+          paths: {
+            ...defaultPaths(),
+            docs: "https://catalyst.tailwindui.com/docs",
+            download: "https://tailwindcss.com/plus/templates/catalyst/download",
+            product: "https://tailwindcss.com/plus/ui-kit",
+            demo: "https://catalyst-demo.tailwindui.com",
           },
-        ],
-      };
+          nextSteps: [
+            {
+              action: "If scaffolding a project, call generate_ui_kit with outDir",
+              tool: "generate_ui_kit",
+            },
+            {
+              action: "Inspect a component API",
+              tool: "get_catalyst_component",
+              detail: "e.g. slug=button or slug=select",
+            },
+            {
+              action: "List color systems before choosing brand colors",
+              tool: "list_catalyst_colors",
+            },
+          ],
+        })
+      );
     }
   );
 
@@ -764,14 +816,20 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
       inputSchema: {},
     },
     async () => {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(listCatalystCustomizations(), null, 2),
-          },
-        ],
-      };
+      return jsonResult(
+        agentEnvelope({
+          summary: "Full Catalyst customization inventory from official docs.",
+          data: listCatalystCustomizations(),
+          nextSteps: [
+            {
+              action: "Scaffold a project with these options applied",
+              tool: "generate_ui_kit",
+              detail: "router, brandColor, lang map to setup steps",
+            },
+            { action: "Deep-dive one component", tool: "get_catalyst_component" },
+          ],
+        })
+      );
     }
   );
 
@@ -859,32 +917,81 @@ Does NOT include Catalyst zip source (download with your license). Stubs throw u
           heroicons,
           force,
         });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "ok",
-                  outDir: result.outDir,
-                  filesWritten: result.filesWritten.length,
-                  files: result.filesWritten,
-                  nextSteps: result.nextSteps,
-                  customizationsCovered: Object.keys(result.customizations),
-                  note: "Copy licensed Catalyst components from the zip into the components directory to replace STUBs.",
-                },
-                null,
-                2
-              ),
+        return jsonResult(
+          agentEnvelope({
+            summary: `Scaffolded a Catalyst-based UI kit project at ${result.outDir} (${result.filesWritten.length} files). Component STUBs are placeholders until the licensed zip is copied in.`,
+            data: {
+              status: "ok",
+              outDir: result.outDir,
+              filesWrittenCount: result.filesWritten.length,
+              files: result.filesWritten,
+              customizationsCovered: Object.keys(result.customizations),
             },
-          ],
-        };
+            paths: {
+              ...defaultPaths(),
+              projectRoot: result.outDir,
+              setupDoc: `${result.outDir}/CATALYST_SETUP.md`,
+              readme: `${result.outDir}/README.md`,
+              manifest: `${result.outDir}/catalyst-manifest.json`,
+              packageJson: `${result.outDir}/package.json`,
+              themeCss: `${result.outDir}/src/styles/theme.css`,
+              colorMap: `${result.outDir}/src/theme/catalyst-theme.ts`,
+              componentsDir: `${result.outDir}/src/components/`,
+              linkComponent: `${result.outDir}/src/components/link.tsx`,
+              componentBarrel: `${result.outDir}/src/components/index.ts`,
+              recipes: `${result.outDir}/src/recipes/`,
+              catalystDownload: "https://tailwindcss.com/plus/templates/catalyst/download",
+              catalystDocs: "https://catalyst.tailwindui.com/docs",
+            },
+            nextSteps: [
+              {
+                action: "Tell the user the scaffold path and that Catalyst zip source is NOT included",
+                detail: result.outDir,
+              },
+              {
+                action: "Install npm dependencies in the scaffold",
+                detail: `cd ${result.outDir} && npm install`,
+              },
+              {
+                action: "User downloads catalyst-ui-kit.zip (licensed)",
+                detail: "https://tailwindcss.com/plus/templates/catalyst/download",
+              },
+              {
+                action: "Copy typescript/javascript components from the zip into src/components/, replacing STUB files",
+                detail: "Keep the generated link.tsx unless the zip provides a better starting Link.",
+              },
+              {
+                action: "Import theme CSS in the app entry",
+                detail: "import './src/styles/theme.css' (or equivalent)",
+              },
+              {
+                action: "Use documented color props from catalyst-theme, not ad-hoc color classes",
+                tool: "list_catalyst_colors",
+              },
+              {
+                action: "Read CATALYST_SETUP.md in the project for the full checklist",
+                detail: `${result.outDir}/CATALYST_SETUP.md`,
+              },
+            ],
+            warnings: [
+              "Do not commit or redistribute Catalyst zip contents.",
+              "STUB components throw until replaced with licensed files.",
+            ],
+          })
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return jsonResult(
+          agentEnvelope({
+            summary: `UI kit scaffold failed: ${message}`,
+            errors: [message],
+            nextSteps: [
+              { action: "Verify outDir is writable", detail: outDir },
+              { action: "Retry generate_ui_kit with force=true if overwriting", tool: "generate_ui_kit" },
+            ],
+          }),
+          true
+        );
       }
     }
   );
@@ -914,49 +1021,80 @@ Does NOT include Catalyst zip source (download with your license). Stubs throw u
         authAction = "Use the 'login' tool to authenticate with your Tailwind Plus account.";
       }
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                server: BRAND.displayName,
-                package: BRAND.packageName,
-                version: PACKAGE_VERSION,
-                dataDir: "~/.tailwind-plus-mcp",
-                note: "Isolated from legacy mcp-for-tailwind (~/.tailwind-mcp) so both can run side-by-side.",
-                authentication: {
-                  status: authStatus,
-                  lastLoginAt: authState.lastLoginAt
-                    ? new Date(authState.lastLoginAt).toISOString()
-                    : undefined,
-                  source: authState.source,
-                  action: authAction,
-                },
-                catalog: {
-                  status: catalogStats ? "synced" : "not_synced",
-                  totalBlocks: catalogStats?.totalBlocks ?? 0,
-                  totalVariants: catalogStats?.totalVariants ?? 0,
-                  action: catalogStats
-                    ? undefined
-                    : "Run: tailwind-plus-mcp sync-catalog --metadata-only",
-                },
-                products: {
-                  templates: products.templates.filter((t) => t.kind === "template").length,
-                  kits: products.templates.filter((t) => t.kind === "kit").length,
-                  catalystComponents: products.catalyst.length,
-                },
-                cache: {
-                  totalCachedVariants: cacheStats.totalVariants,
-                  sizeBytes: cacheStats.totalSize,
-                },
-              },
-              null,
-              2
-            ),
+      const nextSteps: { action: string; tool?: string; detail?: string }[] = [];
+      if (authStatus !== "authenticated") {
+        nextSteps.push({ action: "Authenticate", tool: "login", detail: authAction });
+      }
+      if (!catalogStats) {
+        nextSteps.push({
+          action: "Sync UI block catalog (CLI)",
+          detail: "tailwind-plus-mcp sync-catalog --metadata-only",
+        });
+      }
+      if (authStatus === "authenticated" && catalogStats) {
+        nextSteps.push(
+          { action: "Browse product surfaces", tool: "list_products" },
+          { action: "Fetch UI block code", tool: "get_variant", detail: "list_blocks → list_variants → get_variant" },
+          { action: "Catalyst UI kit", tool: "get_catalyst_setup" },
+          { action: "Scaffold custom kit", tool: "generate_ui_kit", detail: "Requires outDir" }
+        );
+      }
+
+      const summaryParts = [
+        `${BRAND.displayName} v${PACKAGE_VERSION}`,
+        `auth=${authStatus}`,
+        catalogStats
+          ? `catalog=${catalogStats.totalBlocks} blocks / ${catalogStats.totalVariants} variants`
+          : "catalog=not_synced",
+        `cache=${cacheStats.totalVariants} variants`,
+      ];
+
+      return jsonResult(
+        agentEnvelope({
+          summary: summaryParts.join(" · "),
+          data: {
+            server: BRAND.displayName,
+            package: BRAND.packageName,
+            version: PACKAGE_VERSION,
+            authentication: {
+              status: authStatus,
+              lastLoginAt: authState.lastLoginAt
+                ? new Date(authState.lastLoginAt).toISOString()
+                : undefined,
+              source: authState.source,
+              action: authAction,
+            },
+            catalog: {
+              status: catalogStats ? "synced" : "not_synced",
+              totalBlocks: catalogStats?.totalBlocks ?? 0,
+              totalVariants: catalogStats?.totalVariants ?? 0,
+            },
+            products: {
+              templates: products.templates.filter((t) => t.kind === "template").length,
+              kits: products.templates.filter((t) => t.kind === "kit").length,
+              catalystComponents: products.catalyst.length,
+            },
+            cache: {
+              totalCachedVariants: cacheStats.totalVariants,
+              sizeBytes: cacheStats.totalSize,
+            },
+            workflow: {
+              uiBlocks: "list_categories → list_blocks → list_variants → get_variant",
+              templates: "list_templates → get_template → user downloads zip from account",
+              kits: "list_kits → get_template(oatmeal) → user downloads zip",
+              catalyst:
+                "get_catalyst_setup → list_catalyst / get_catalyst_component → generate_ui_kit → user copies zip into src/components",
+            },
           },
-        ],
-      };
+          nextSteps,
+          warnings:
+            authStatus !== "authenticated"
+              ? ["get_variant will fail until login succeeds"]
+              : !catalogStats
+                ? ["UI block listing needs sync-catalog first"]
+                : [],
+        })
+      );
     }
   );
 
@@ -970,70 +1108,72 @@ Does NOT include Catalyst zip source (download with your license). Stubs throw u
     async () => {
       const authState = checkAuthState();
       if (authState.isAuthenticated) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                status: "already_authenticated",
-                message: "Already logged in to Tailwind Plus.",
-                lastLoginAt: authState.lastLoginAt
-                  ? new Date(authState.lastLoginAt).toISOString()
-                  : undefined,
-                source: authState.source,
-              }),
+        return jsonResult(
+          agentEnvelope({
+            summary: "Already authenticated with Tailwind Plus; no login needed.",
+            data: {
+              status: "already_authenticated",
+              lastLoginAt: authState.lastLoginAt
+                ? new Date(authState.lastLoginAt).toISOString()
+                : undefined,
+              source: authState.source,
             },
-          ],
-        };
+            nextSteps: [
+              { action: "Fetch UI block code", tool: "get_variant" },
+              { action: "Browse products", tool: "list_products" },
+            ],
+          })
+        );
       }
 
       try {
         await login();
         const newAuthState = checkAuthState();
         if (newAuthState.isAuthenticated) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  status: "success",
-                  message: "Successfully logged in to Tailwind Plus!",
-                  nextSteps: [
-                    "sync-catalog --metadata-only (CLI) to build UI block index",
-                    "list_products to see templates / kits / Catalyst",
-                    "get_variant to fetch UI block code",
-                  ],
-                }),
+          return jsonResult(
+            agentEnvelope({
+              summary: "Login succeeded. Cookies saved for this unofficial MCP only.",
+              data: { status: "success" },
+              paths: {
+                ...defaultPaths(),
+                cookiesJustWritten: "~/.tailwind-plus-mcp/cookies.json",
               },
-            ],
-          };
+              nextSteps: [
+                {
+                  action: "If catalog empty, sync UI blocks (CLI)",
+                  detail: "tailwind-plus-mcp sync-catalog --metadata-only",
+                },
+                { action: "List product surfaces", tool: "list_products" },
+                {
+                  action: "Fetch a component",
+                  tool: "get_variant",
+                  detail: "list_categories → list_blocks → list_variants first if slugs unknown",
+                },
+              ],
+            })
+          );
         }
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                status: "failed",
-                message: "Login was not completed. Please try again.",
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return jsonResult(
+          agentEnvelope({
+            summary: "Login did not complete (browser closed or timed out).",
+            errors: ["LOGIN_INCOMPLETE"],
+            nextSteps: [{ action: "Retry login with the user present at the machine", tool: "login" }],
+          }),
+          true
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                status: "error",
-                message: `Login failed: ${message}`,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return jsonResult(
+          agentEnvelope({
+            summary: `Login failed: ${message}`,
+            errors: [message],
+            nextSteps: [
+              { action: "Ensure Chrome/Chromium is available" },
+              { action: "Retry login", tool: "login" },
+            ],
+          }),
+          true
+        );
       }
     }
   );

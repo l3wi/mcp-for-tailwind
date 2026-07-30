@@ -1,6 +1,6 @@
 {
   "name": "tailwind-plus-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Tailwind Plus MCP (Unofficial) — MCP server for Tailwind Plus license holders: UI blocks, templates, kits, and Catalyst metadata for LLM-assisted development",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",

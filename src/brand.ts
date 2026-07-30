@@ -13,7 +13,7 @@ export const BRAND = {
   /** MCP server name advertised to clients */
   mcpServerName: "tailwind-plus-mcp-unofficial",
   /** Semver for this unofficial fork line */
-  version: "0.3.0",
+  version: "0.3.1",
   /** One-line description */
   description:
     "Unofficial MCP server giving Tailwind Plus license holders programmatic access to UI blocks, templates, kits, and Catalyst metadata for LLM-assisted development.",

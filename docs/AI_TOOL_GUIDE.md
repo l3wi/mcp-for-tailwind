@@ -1,102 +1,118 @@
-# Tailwind Plus MCP (Unofficial) — AI Tool Guide
+# AI Tool Guide — Tailwind Plus MCP (Unofficial)
 
-This guide helps AI assistants use the **Tailwind Plus MCP (Unofficial)** server effectively.
+You are an AI agent using this MCP. **Read tool envelopes carefully.**
 
-## Quick start
+## Response envelope
 
-1. **`check_status`** — verify auth + catalog
-2. **`list_products`** — see UI blocks / templates / kits / Catalyst
-3. **`search`** or **`list_categories` → `list_blocks` → `list_variants`**
-4. **`get_variant`** — fetch code (requires auth)
+Successful (and most error) results look like:
 
-If catalog is empty: ask the user to run  
-`tailwind-plus-mcp sync-catalog --metadata-only`
+| Field | Meaning |
+|-------|---------|
+| `summary` | What happened — tell the user this first |
+| `data` | Payload (code, lists, guides) |
+| `paths` | Filesystem / URL locations — **use these, do not invent paths** |
+| `nextSteps[]` | Ordered actions: `{ action, tool?, detail? }` |
+| `warnings[]` | Constraints (auth, stubs, licensing) |
+| `agentNotes[]` | Standing rules |
 
-## Tools
+If `nextSteps` includes a `tool` field, call that tool next unless the user redirected you.
 
-### UI Blocks
+## Standing rules
 
-| Tool | Auth | Purpose |
-|------|------|---------|
-| `list_categories` | No | marketing / application-ui / ecommerce |
-| `list_blocks` | No | Blocks in a category |
-| `list_variants` | No | Variants for a block |
-| `get_variant` | Yes | Source code |
-| `search` | No | Search blocks + products |
-| `suggest` | No | Suggestions for what you're building |
+1. **Data dir** is always `~/.tailwind-plus-mcp` for this server (not `~/.tailwind-mcp`).
+2. **UI block source** only via `get_variant` after auth.
+3. **Templates / kits / Catalyst zips** are account downloads — never claim you “have the zip.”
+4. **`generate_ui_kit`** creates stubs + setup only. User must copy licensed Catalyst files into `src/components/`.
+5. Prefer **documented Catalyst `color` props** over inventing utility color classes.
+6. HTML blocks may need **Tailwind Plus Elements** — honor `data.notes` / `dependencies`.
 
-### Products (metadata)
-
-| Tool | Purpose |
-|------|---------|
-| `list_products` | Full surface overview |
-| `list_templates` | Next.js site templates |
-| `list_kits` | Kits (Oatmeal, …) |
-| `get_template` | One template/kit by slug |
-| `list_catalyst` | Catalyst components + docs URLs |
-| `get_catalyst_component` | One Catalyst component |
-
-### Auth
-
-| Tool | Purpose |
-|------|---------|
-| `check_status` | Health |
-| `login` | Browser login |
-
-## `get_variant` parameters
+## Bootstrap
 
 ```
-category: marketing | application-ui | ecommerce
-block:    heroes | testimonials | …
-variant:  simple-centered | …
-format:   react | vue | html     (default react)
-version:  v4 | v3.4              (default v4 → latest v4.x on page)
-theme:    light | dark | system  (default light)
+1. check_status
+2. If auth bad → login (user must be at the machine)
+3. If catalog empty → tell user to run: tailwind-plus-mcp sync-catalog --metadata-only
+4. Proceed with the workflow that matches the request
 ```
 
-Notes:
-
-- Tailwind Plus currently targets **Tailwind CSS v4.3** content under the v4 picker.
-- **system** theme returns dual-mode snippets (dark: variants).
-- HTML interactive blocks may list **`@tailwindplus/elements`** in dependencies/notes.
-
-## Typical workflows
-
-### SaaS landing page (UI blocks)
+## Workflow A — UI block into a project
 
 ```
-1. list_categories
-2. list_blocks(category="marketing")
-3. get_variant(category="marketing", block="heroes", variant="simple-centered", format="react", version="v4", theme="system")
-4. suggest(building="SaaS landing page", alreadyUsed=["heroes"])
+list_categories
+list_blocks(category)
+list_variants(category, block)
+get_variant(category, block, variant, format, version="v4", theme)
+→ Read summary + data.code
+→ Install data.dependencies
+→ Write file in user project
+→ Follow data.notes
 ```
 
-### Prefer a full template
+Themes: `light` | `dark` | `system` (system includes `dark:` dual-mode classes).  
+Version: `v4` resolves to latest picker label (e.g. v4.3).
+
+## Workflow B — Template or Oatmeal kit
 
 ```
-1. list_templates
-2. get_template(slug="oatmeal") or get_template(slug="radiant")
-→ Point user to download from their Tailwind Plus account
+list_templates / list_kits
+get_template(slug)
+→ Give user product URL from data
+→ Instruct download from their Tailwind Plus account
+→ Do not invent component file trees for the zip
 ```
 
-### App UI with Catalyst
+## Workflow C — Catalyst / custom UI kit
 
 ```
-1. list_catalyst
-2. get_catalyst_component(slug="sidebar-layout")
-→ Use docs URL; source comes from Catalyst zip
+get_catalyst_setup                    # what Catalyst requires
+list_catalyst_customizations          # full option inventory
+list_catalyst_colors                  # color prop systems
+get_catalyst_component(slug)          # API for one component
+generate_ui_kit(outDir, router, brandColor, lang)
+→ Tell user paths.projectRoot and paths.setupDoc
+→ User: npm install
+→ User: download zip (paths.catalystDownload)
+→ User: copy components into paths.componentsDir (replace STUBs)
+→ Import paths.themeCss
 ```
 
-## Errors
+After `generate_ui_kit`, **always** surface:
 
-| Code | Meaning | Fix |
-|------|---------|-----|
-| `AUTH_REQUIRED` | Not logged in | `login` tool |
-| `CATALOG_EMPTY` / `NO_BLOCKS` | No sync | `sync-catalog --metadata-only` |
-| `BLOCK_NOT_FOUND` / `VARIANT_NOT_FOUND` | Bad slug | `list_blocks` / `list_variants` |
-| `CODE_FETCH_FAILED` | DOM/scrape issue | Retry; site UI may have changed |
+- `paths.projectRoot`
+- `paths.setupDoc` (`CATALYST_SETUP.md`)
+- `nextSteps` in order
 
-## Isolation
+## Workflow D — “What can Tailwind Plus do?”
 
-This unofficial server stores data in `~/.tailwind-plus-mcp`.  
-Legacy `mcp-for-tailwind` uses `~/.tailwind-mcp`. Both can run at once under different MCP server keys.
+```
+list_products
+check_status   # includes workflow map in data.workflow
+```
+
+## Tool map (short)
+
+| Tool | When |
+|------|------|
+| `check_status` | Start of session / after errors |
+| `login` | AUTH_REQUIRED |
+| `list_*` / `search` / `suggest` | Discovery |
+| `get_variant` | Need UI block source |
+| `get_template` | Template/kit metadata |
+| `get_catalyst_*` / `list_catalyst_*` | UI Kit docs surface |
+| `generate_ui_kit` | Scaffold custom kit project |
+
+## Common errors
+
+| Signal | Your response |
+|--------|----------------|
+| `AUTH_REQUIRED` | Call `login`, wait for user, retry |
+| `CATALOG_EMPTY` / no blocks | Ask user for `sync-catalog --metadata-only` |
+| `BLOCK_NOT_FOUND` | `list_blocks` then retry |
+| `VARIANT_NOT_FOUND` | `list_variants` then retry |
+| Scaffold STUB throws | User must copy Catalyst zip files into `src/components/` |
+
+## Do not
+
+- Mix paths with legacy `mcp-for-tailwind` (`~/.tailwind-mcp`) unless seeding was intentional.
+- Paste entire catalogs into chat when a tool can query them.
+- Claim Catalyst/template source is “included” in the MCP package.
