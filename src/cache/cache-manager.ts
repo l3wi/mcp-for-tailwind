@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { writeFile, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -200,6 +200,7 @@ export class CacheManager {
 
   /**
    * Get cached variant code, or null if not cached/expired.
+   * Falls back to on-disk file if manifest entry is missing (CLI short-lived process fix).
    */
   async getVariant(
     category: Context,
@@ -210,9 +211,35 @@ export class CacheManager {
     version: TailwindVersion
   ): Promise<VariantCode | null> {
     const key = generateVariantCacheKey(category, blockSlug, variantSlug, format, theme, version);
-    const entry = this.manifest.entries[key];
+    let entry = this.manifest.entries[key];
 
-    if (!entry) return null;
+    // Manifest may be empty after crash / debounced-write loss — recover from file
+    if (!entry) {
+      const filePath = join(CACHE_DIR, `${key}.json`);
+      if (existsSync(filePath)) {
+        try {
+          const data = await readFile(filePath, "utf-8");
+          const variant = JSON.parse(data) as VariantCode;
+          const cachedAt = variant.cachedAt || Date.now();
+          entry = {
+            id: `${category}/${blockSlug}/${variantSlug}`,
+            format,
+            theme,
+            version,
+            cachedAt,
+            expiresAt: cachedAt + CACHE_TTL_MS,
+            filePath,
+            size: Buffer.byteLength(data),
+          };
+          this.manifest.entries[key] = entry;
+          this.flushManifestSync();
+          return variant;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
 
     if (this.isExpired(entry)) {
       await this.delete(key);
@@ -230,6 +257,7 @@ export class CacheManager {
 
   /**
    * Cache a variant code.
+   * Flushes manifest immediately so short-lived CLI processes keep cache hits.
    */
   async setVariant(variant: VariantCode): Promise<void> {
     const key = generateVariantCacheKey(
@@ -258,7 +286,7 @@ export class CacheManager {
     };
 
     this.manifest.entries[key] = entry;
-    this.markManifestDirty();
+    this.flushManifestSync();
   }
 
   /**
@@ -273,8 +301,10 @@ export class CacheManager {
     version: TailwindVersion
   ): boolean {
     const key = generateVariantCacheKey(category, blockSlug, variantSlug, format, theme, version);
-    const entry = this.manifest.entries[key];
-    return entry ? !this.isExpired(entry) : false;
+    if (this.manifest.entries[key] && !this.isExpired(this.manifest.entries[key]!)) {
+      return true;
+    }
+    return existsSync(join(CACHE_DIR, `${key}.json`));
   }
 
   /**
@@ -349,14 +379,73 @@ export class CacheManager {
   }
 
   private loadManifest(): CacheManifestWithTTL {
+    let manifest: CacheManifestWithTTL;
     if (existsSync(CACHE_MANIFEST_PATH)) {
       try {
-        return JSON.parse(readFileSync(CACHE_MANIFEST_PATH, "utf-8"));
+        manifest = JSON.parse(readFileSync(CACHE_MANIFEST_PATH, "utf-8"));
       } catch {
-        return this.createEmptyManifest();
+        manifest = this.createEmptyManifest();
+      }
+    } else {
+      manifest = this.createEmptyManifest();
+    }
+
+    // Recover orphan cache files left without a manifest (debounced flush lost on exit)
+    this.reconcileOrphanFiles(manifest);
+    return manifest;
+  }
+
+  /**
+   * Index any *.json variant files on disk that are missing from the manifest.
+   */
+  private reconcileOrphanFiles(manifest: CacheManifestWithTTL): void {
+    if (!existsSync(CACHE_DIR)) return;
+
+    let changed = false;
+    for (const name of readdirSync(CACHE_DIR)) {
+      if (!name.endsWith(".json") || name === "manifest.json") continue;
+      const key = name.slice(0, -".json".length);
+      if (manifest.entries[key]) continue;
+
+      const filePath = join(CACHE_DIR, name);
+      try {
+        const raw = readFileSync(filePath, "utf-8");
+        const variant = JSON.parse(raw) as VariantCode;
+        const cachedAt = variant.cachedAt || Date.now();
+        manifest.entries[key] = {
+          id: `${variant.category}/${variant.blockSlug}/${variant.variantSlug}`,
+          format: variant.format,
+          theme: variant.theme,
+          version: variant.version,
+          cachedAt,
+          expiresAt: cachedAt + CACHE_TTL_MS,
+          filePath,
+          size: Buffer.byteLength(raw),
+        };
+        changed = true;
+      } catch {
+        // skip corrupt
       }
     }
-    return this.createEmptyManifest();
+
+    if (changed) {
+      this.manifest = manifest;
+      this.flushManifestSync();
+    }
+  }
+
+  /** Immediate manifest write — required for CLI processes that exit quickly. */
+  private flushManifestSync(): void {
+    this.manifest.stats = {
+      totalSize: Object.values(this.manifest.entries).reduce((sum, e) => sum + e.size, 0),
+      entryCount: Object.keys(this.manifest.entries).length,
+    };
+    writeFileSync(CACHE_MANIFEST_PATH, JSON.stringify(this.manifest, null, 2));
+    this.manifestDirty = false;
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
   }
 
   private createEmptyManifest(): CacheManifestWithTTL {
