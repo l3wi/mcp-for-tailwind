@@ -19,6 +19,13 @@ import {
   CATALYST_COMPONENTS,
   TEMPLATES,
 } from "./data/products.ts";
+import {
+  getCatalystComponent,
+  getCatalystSetupGuide,
+  listCatalystCustomizations,
+  CATALYST_COMPONENTS as CATALYST_FULL,
+} from "./data/catalyst.ts";
+import { generateCatalystUiKit } from "./generate/ui-kit.ts";
 import { BRAND } from "./brand.ts";
 import { TIMING, PACKAGE_VERSION, CONFIG_DIR } from "./config.ts";
 import type { Context, CodeFormat, Theme, TailwindVersion, Block } from "./types/index.ts";
@@ -48,6 +55,9 @@ COMMANDS:
   list-templates                  List site templates
   list-kits                       List kits (e.g. Oatmeal)
   list-catalyst                   List Catalyst UI kit components
+  catalyst-setup                  Full Catalyst getting-started + customizations
+  catalyst-component <slug>       Full component API (props, colors, exports)
+  generate-ui-kit --out=<dir>     Scaffold custom Catalyst UI kit project
 
   sync-catalog [opts]             Sync UI-block catalog (and optionally code)
   clear-cache [opts]              Clear cached components
@@ -64,6 +74,11 @@ OPTIONS:
   --force                         Force re-sync even if already synced
   --metadata-only                 Only sync metadata, skip code download (fast)
   --verbose                       Show detailed progress and debug info
+  --out=<dir>                     Output directory for generate-ui-kit
+  --name=<name>                   Project name for generate-ui-kit
+  --lang=typescript|javascript    Language for scaffold (default typescript)
+  --router=next|remix|inertia|plain  Link integration (default next)
+  --brand=<color>                 Brand Tailwind color for @theme (default indigo)
 
 DATA DIR: ${CONFIG_DIR}
   (isolated from legacy mcp-for-tailwind at ~/.tailwind-mcp)
@@ -202,9 +217,9 @@ async function main() {
     }
 
     case "list-catalyst": {
-      console.log(`\n=== Catalyst components (${CATALYST_COMPONENTS.length}) ===\n`);
-      const byGroup = new Map<string, typeof CATALYST_COMPONENTS>();
-      for (const c of CATALYST_COMPONENTS) {
+      console.log(`\n=== Catalyst components (${CATALYST_FULL.length}) ===\n`);
+      const byGroup = new Map<string, typeof CATALYST_FULL>();
+      for (const c of CATALYST_FULL) {
         const list = byGroup.get(c.group) || [];
         list.push(c);
         byGroup.set(c.group, list);
@@ -212,10 +227,61 @@ async function main() {
       for (const [group, comps] of byGroup) {
         console.log(`${group}:`);
         for (const c of comps) {
-          console.log(`  - ${c.name} (${c.slug}) → ${c.docsUrl}`);
+          const colors = c.colors ? ` [${c.colors.length} colors]` : "";
+          console.log(`  - ${c.name} (${c.slug})${colors} → ${c.docsUrl}`);
         }
         console.log("");
       }
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-setup": {
+      console.log(JSON.stringify(getCatalystSetupGuide(), null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-component": {
+      const slug = opts._query || args[1] || opts.slug;
+      if (!slug) {
+        console.error("Usage: catalyst-component <slug>");
+        process.exit(1);
+      }
+      const c = getCatalystComponent(slug);
+      if (!c) {
+        console.error(`Unknown component '${slug}'. Try: list-catalyst`);
+        process.exit(1);
+      }
+      console.log(JSON.stringify(c, null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-customizations": {
+      console.log(JSON.stringify(listCatalystCustomizations(), null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "generate-ui-kit": {
+      const out = opts.out;
+      if (!out) {
+        console.error("Usage: generate-ui-kit --out=./my-kit [--name=my-kit] [--router=next] [--brand=indigo]");
+        process.exit(1);
+      }
+      const result = generateCatalystUiKit({
+        outDir: out,
+        name: opts.name,
+        lang: (opts.lang as "typescript" | "javascript") || "typescript",
+        router: (opts.router as "next" | "remix" | "inertia" | "plain") || "next",
+        brandColor: opts.brand || "indigo",
+        force: opts.force === "true",
+      });
+      console.log(`\nScaffolded Catalyst UI kit at ${result.outDir}`);
+      console.log(`Files: ${result.filesWritten.length}`);
+      console.log("\nNext steps:");
+      for (const s of result.nextSteps) console.log(`  - ${s}`);
       process.exit(0);
       break;
     }

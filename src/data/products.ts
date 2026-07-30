@@ -4,7 +4,14 @@
  * this layer gives LLMs accurate discovery, links, and stack metadata.
  */
 import type { CatalystComponentInfo, ProductsCatalog, TemplateInfo } from "../types/index.ts";
-import { BASE_URL, CATALYST_DOCS_URL, TEMPLATES_URL, UI_KIT_URL } from "../config.ts";
+import { BASE_URL, TEMPLATES_URL, UI_KIT_URL } from "../config.ts";
+import {
+  CATALYST_COMPONENTS as CATALYST_FULL,
+  CATALYST_DOCS_BASE,
+  getCatalystComponent as getCatalystFull,
+} from "./catalyst.ts";
+
+const CATALYST_DOCS_URL = CATALYST_DOCS_BASE;
 
 export const PRODUCT_SURFACE_NOTES = [
   "UI Blocks: copy-paste React / Vue / HTML snippets via get_variant (requires auth).",
@@ -162,34 +169,15 @@ export const TEMPLATES: TemplateInfo[] = [
   },
 ];
 
-/** Catalyst components from the public docs index (stable zip kit, not UI-block scrapes). */
-export const CATALYST_COMPONENTS: CatalystComponentInfo[] = [
-  { id: "button", name: "Button", slug: "button", group: "Elements", docsUrl: `${CATALYST_DOCS_URL}/button` },
-  { id: "input", name: "Input", slug: "input", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/input` },
-  { id: "textarea", name: "Textarea", slug: "textarea", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/textarea` },
-  { id: "checkbox", name: "Checkbox", slug: "checkbox", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/checkbox` },
-  { id: "radio", name: "Radio groups", slug: "radio", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/radio` },
-  { id: "switch", name: "Switch", slug: "switch", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/switch` },
-  { id: "combobox", name: "Combobox", slug: "combobox", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/combobox` },
-  { id: "listbox", name: "Listbox", slug: "listbox", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/listbox` },
-  { id: "fieldset", name: "Fieldset", slug: "fieldset", group: "Forms", docsUrl: `${CATALYST_DOCS_URL}/fieldset` },
-  { id: "table", name: "Table", slug: "table", group: "Data display", docsUrl: `${CATALYST_DOCS_URL}/table` },
-  { id: "description-list", name: "Description list", slug: "description-list", group: "Data display", docsUrl: `${CATALYST_DOCS_URL}/description-list` },
-  { id: "badge", name: "Badge", slug: "badge", group: "Elements", docsUrl: `${CATALYST_DOCS_URL}/badge` },
-  { id: "avatar", name: "Avatar", slug: "avatar", group: "Elements", docsUrl: `${CATALYST_DOCS_URL}/avatar` },
-  { id: "divider", name: "Divider", slug: "divider", group: "Elements", docsUrl: `${CATALYST_DOCS_URL}/divider` },
-  { id: "heading", name: "Heading", slug: "heading", group: "Typography", docsUrl: `${CATALYST_DOCS_URL}/heading` },
-  { id: "text", name: "Text", slug: "text", group: "Typography", docsUrl: `${CATALYST_DOCS_URL}/text` },
-  { id: "dropdown", name: "Dropdown", slug: "dropdown", group: "Overlays", docsUrl: `${CATALYST_DOCS_URL}/dropdown` },
-  { id: "dialog", name: "Dialog", slug: "dialog", group: "Overlays", docsUrl: `${CATALYST_DOCS_URL}/dialog` },
-  { id: "alert", name: "Alert", slug: "alert", group: "Overlays", docsUrl: `${CATALYST_DOCS_URL}/alert` },
-  { id: "pagination", name: "Pagination", slug: "pagination", group: "Navigation", docsUrl: `${CATALYST_DOCS_URL}/pagination` },
-  { id: "navbar", name: "Navbar", slug: "navbar", group: "Navigation", docsUrl: `${CATALYST_DOCS_URL}/navbar` },
-  { id: "sidebar", name: "Sidebar", slug: "sidebar", group: "Navigation", docsUrl: `${CATALYST_DOCS_URL}/sidebar` },
-  { id: "sidebar-layout", name: "Sidebar layout", slug: "sidebar-layout", group: "Layouts", docsUrl: `${CATALYST_DOCS_URL}/sidebar-layout` },
-  { id: "stacked-layout", name: "Stacked layout", slug: "stacked-layout", group: "Layouts", docsUrl: `${CATALYST_DOCS_URL}/stacked-layout` },
-  { id: "auth-layout", name: "Auth layout", slug: "auth-layout", group: "Layouts", docsUrl: `${CATALYST_DOCS_URL}/auth-layout` },
-];
+/** Catalyst components — full docs set including Select (was missing). */
+export const CATALYST_COMPONENTS: CatalystComponentInfo[] = CATALYST_FULL.map((c) => ({
+  id: c.id,
+  name: c.name,
+  slug: c.slug,
+  group: c.group,
+  docsUrl: c.docsUrl,
+  description: c.features.join("; "),
+}));
 
 export function buildProductsCatalog(): ProductsCatalog {
   return {
@@ -207,8 +195,19 @@ export function getTemplate(slug: string): TemplateInfo | undefined {
 }
 
 export function getCatalystComponent(slug: string): CatalystComponentInfo | undefined {
-  return CATALYST_COMPONENTS.find((c) => c.slug === slug || c.id === slug);
+  const full = getCatalystFull(slug);
+  if (!full) return undefined;
+  return {
+    id: full.id,
+    name: full.name,
+    slug: full.slug,
+    group: full.group,
+    docsUrl: full.docsUrl,
+    description: full.features.join("; "),
+  };
 }
+
+export { getCatalystFull };
 
 export function listKits(): TemplateInfo[] {
   return TEMPLATES.filter((t) => t.kind === "kit");

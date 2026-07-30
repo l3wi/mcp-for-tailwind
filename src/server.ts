@@ -11,7 +11,6 @@ import { CacheManager } from "./cache/cache-manager.ts";
 import { search, suggest } from "./data/search.ts";
 import {
   buildProductsCatalog,
-  getCatalystComponent,
   getTemplate,
   listKits,
   listTemplatesOnly,
@@ -19,6 +18,18 @@ import {
   CATALYST_COMPONENTS,
   TEMPLATES,
 } from "./data/products.ts";
+import {
+  CATALYST_COMPONENTS as CATALYST_FULL,
+  getCatalystComponent,
+  getCatalystSetupGuide,
+  listCatalystByGroup,
+  listCatalystCustomizations,
+  CATALYST_CONTROL_COLORS,
+  CATALYST_BADGE_COLORS,
+  CATALYST_ADAPTIVE_COLORS,
+  CATALYST_SOLID_COLORS,
+} from "./data/catalyst.ts";
+import { generateCatalystUiKit } from "./generate/ui-kit.ts";
 import { BRAND } from "./brand.ts";
 import {
   DEFAULT_FORMAT,
@@ -641,13 +652,13 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
     "list_catalyst",
     {
       title: "List Catalyst Components",
-      description: `List Catalyst UI Kit components with docs URLs (catalyst.tailwindui.com). Catalyst is a zip starter kit, not UI-block scrapes.`,
+      description: `List all Catalyst UI Kit components from the official docs (26 components including Select). Group filter optional. For full APIs use get_catalyst_component.`,
       inputSchema: {
-        group: z.string().optional().describe("Filter by group (Forms, Layouts, …)"),
+        group: z.string().optional().describe("Filter by group: Layouts, Forms, Elements, …"),
       },
     },
     async ({ group }) => {
-      let items = CATALYST_COMPONENTS;
+      let items = CATALYST_FULL;
       if (group) {
         const g = group.toLowerCase();
         items = items.filter((c) => c.group.toLowerCase().includes(g));
@@ -659,10 +670,20 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
             text: JSON.stringify(
               {
                 count: items.length,
-                components: items,
+                byGroup: listCatalystByGroup(),
+                components: items.map((c) => ({
+                  name: c.name,
+                  slug: c.slug,
+                  group: c.group,
+                  exports: c.exports,
+                  docsUrl: c.docsUrl,
+                  hasColors: Boolean(c.colors?.length),
+                  defaultColor: c.defaultColor,
+                })),
                 productUrl: "https://tailwindcss.com/plus/ui-kit",
                 docs: "https://catalyst.tailwindui.com/docs",
-                stack: ["Tailwind CSS v4.2+", "React 19", "Headless UI v2.1", "TypeScript"],
+                download: "https://tailwindcss.com/plus/templates/catalyst/download",
+                stack: ["Tailwind CSS v4+", "React 19", "Headless UI v2", "motion", "clsx"],
               },
               null,
               2
@@ -676,10 +697,10 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
   server.registerTool(
     "get_catalyst_component",
     {
-      title: "Get Catalyst Component Info",
-      description: `Lookup a Catalyst component by slug and return its documentation URL.`,
+      title: "Get Catalyst Component (full API)",
+      description: `Full Catalyst component docs model: exports, props, color options, className policy, icon sizes, examples, related components.`,
       inputSchema: {
-        slug: z.string().describe("Component slug (e.g. combobox, sidebar-layout)"),
+        slug: z.string().describe("Component slug (e.g. button, select, sidebar-layout)"),
       },
     },
     async ({ slug }) => {
@@ -691,7 +712,7 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
               type: "text" as const,
               text: JSON.stringify({
                 error: "NOT_FOUND",
-                available: CATALYST_COMPONENTS.map((x) => x.slug),
+                available: CATALYST_FULL.map((x) => x.slug),
               }),
             },
           ],
@@ -705,7 +726,7 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
             text: JSON.stringify(
               {
                 component: c,
-                note: "Source lives in the Catalyst zip from your Tailwind Plus account. Docs describe the public API.",
+                note: "Source files live in catalyst-ui-kit.zip from your Tailwind Plus account. This tool returns the public API/customization surface from the docs.",
               },
               null,
               2
@@ -713,6 +734,158 @@ EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
           },
         ],
       };
+    }
+  );
+
+  server.registerTool(
+    "get_catalyst_setup",
+    {
+      title: "Catalyst Setup Guide",
+      description: `Complete Getting Started checklist from catalyst.tailwindui.com/docs: download, deps, Link router integration (Next/Remix/Inertia), Inter @theme font, Heroicons sizes, theming boundaries.`,
+      inputSchema: {},
+    },
+    async () => {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(getCatalystSetupGuide(), null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "list_catalyst_customizations",
+    {
+      title: "List All Catalyst Customizations",
+      description: `100% inventory of customization features mentioned in Catalyst docs: colors (adaptive + solid + badge), button styles, form states, Link routers, fonts, icons, className policy, theme policy, dependencies.`,
+      inputSchema: {},
+    },
+    async () => {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(listCatalystCustomizations(), null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "list_catalyst_colors",
+    {
+      title: "List Catalyst Color Systems",
+      description: `Color prop coverage for Catalyst controls and badges (from docs color references).`,
+      inputSchema: {
+        kind: z
+          .enum(["control", "badge", "all"])
+          .optional()
+          .default("all")
+          .describe("control = Button/Checkbox/Switch/Radio; badge = Badge colors"),
+      },
+    },
+    async ({ kind = "all" }) => {
+      const payload: Record<string, unknown> = {
+        adaptive: CATALYST_ADAPTIVE_COLORS,
+        solid: CATALYST_SOLID_COLORS,
+        defaultControl: "dark/zinc",
+        defaultBadge: "zinc",
+        usage:
+          "Prefer color prop over custom classes. Adaptive colors (dark/zinc, dark/white) flip for light/dark contrast.",
+      };
+      if (kind === "control" || kind === "all") {
+        payload.controlColors = CATALYST_CONTROL_COLORS;
+        payload.controlCount = CATALYST_CONTROL_COLORS.length;
+        payload.controlComponents = ["button", "checkbox", "switch", "radio", "dropdown-button"];
+      }
+      if (kind === "badge" || kind === "all") {
+        payload.badgeColors = CATALYST_BADGE_COLORS;
+        payload.badgeCount = CATALYST_BADGE_COLORS.length;
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "generate_ui_kit",
+    {
+      title: "Generate Custom Catalyst UI Kit Scaffold",
+      description: `Scaffold a project for building your own component system on Catalyst: package.json deps, Link for Next/Remix/Inertia, Inter @theme CSS, brand color mapping, color maps, component barrel + stubs, CATALYST_SETUP.md.
+
+Does NOT include Catalyst zip source (download with your license). Stubs throw until you copy files from the zip.`,
+      inputSchema: {
+        outDir: z.string().describe("Absolute or relative output directory"),
+        name: z.string().optional().describe("Project name"),
+        lang: z.enum(["typescript", "javascript"]).optional().default("typescript"),
+        router: z
+          .enum(["next", "remix", "inertia", "plain"])
+          .optional()
+          .default("next")
+          .describe("Client-side Link integration"),
+        brandColor: z
+          .string()
+          .optional()
+          .default("indigo")
+          .describe("Tailwind palette name for brand CSS variables (e.g. indigo, cyan, rose)"),
+        interFont: z.boolean().optional().default(true),
+        heroicons: z.boolean().optional().default(true),
+        force: z.boolean().optional().default(false).describe("Overwrite existing stubs"),
+      },
+    },
+    async ({
+      outDir,
+      name,
+      lang = "typescript",
+      router = "next",
+      brandColor = "indigo",
+      interFont = true,
+      heroicons = true,
+      force = false,
+    }) => {
+      try {
+        const result = generateCatalystUiKit({
+          outDir,
+          name,
+          lang,
+          router,
+          brandColor,
+          interFont,
+          heroicons,
+          force,
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "ok",
+                  outDir: result.outDir,
+                  filesWritten: result.filesWritten.length,
+                  files: result.filesWritten,
+                  nextSteps: result.nextSteps,
+                  customizationsCovered: Object.keys(result.customizations),
+                  note: "Copy licensed Catalyst components from the zip into the components directory to replace STUBs.",
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
+          isError: true,
+        };
+      }
     }
   );
 
@@ -914,6 +1087,10 @@ app.get("/", (c) => {
       "get_template",
       "list_catalyst",
       "get_catalyst_component",
+      "get_catalyst_setup",
+      "list_catalyst_customizations",
+      "list_catalyst_colors",
+      "generate_ui_kit",
       "check_status",
       "login",
     ],
