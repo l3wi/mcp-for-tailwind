@@ -9,36 +9,61 @@ import { VariantFetcher } from "./browser/variant-fetcher.ts";
 import { CatalogManager } from "./data/catalog-manager.ts";
 import { CacheManager } from "./cache/cache-manager.ts";
 import { search, suggest } from "./data/search.ts";
+import {
+  buildProductsCatalog,
+  getCatalystComponent,
+  getTemplate,
+  listKits,
+  listTemplatesOnly,
+  productOverview,
+  CATALYST_COMPONENTS,
+  TEMPLATES,
+} from "./data/products.ts";
+import { BRAND } from "./brand.ts";
+import {
+  DEFAULT_FORMAT,
+  DEFAULT_TAILWIND_VERSION,
+  DEFAULT_THEME,
+  PACKAGE_VERSION,
+} from "./config.ts";
 
-// Singletons
 const catalogManager = new CatalogManager();
 const cacheManager = new CacheManager();
 
-// Create variant fetcher
 function createVariantFetcher() {
   return new VariantFetcher(getBrowser, setupPage);
 }
 
-// Create and configure an MCP server instance
+const versionSchema = z
+  .string()
+  .optional()
+  .default(DEFAULT_TAILWIND_VERSION)
+  .describe("Tailwind version: 'v4' (latest v4.x on page) or 'v3.4' (legacy). Concrete labels like v4.0 also accepted.");
+
+const themeSchema = z
+  .enum(["light", "dark", "system"])
+  .optional()
+  .default(DEFAULT_THEME)
+  .describe("Theme mode: light, dark, or system (dual-mode snippet)");
+
 function createMcpServer(): McpServer {
   const server = new McpServer(
-    { name: "mcp-for-tailwind", version: "0.2.0" },
+    { name: BRAND.mcpServerName, version: PACKAGE_VERSION },
     { capabilities: { tools: {} } }
   );
 
-  // Tool 1: list_categories
   server.registerTool(
     "list_categories",
     {
-      title: "List Categories",
-      description: `List all top-level Tailwind Plus UI categories.
+      title: "List UI Block Categories",
+      description: `List top-level Tailwind Plus UI block categories.
 
 CATEGORIES:
-- marketing: Landing pages, hero sections, pricing (~32 blocks)
-- application-ui: Dashboards, forms, tables, modals (~45 blocks)
-- ecommerce: Products, carts, checkout (~18 blocks)
+- marketing: Landing pages, heroes, pricing
+- application-ui: Dashboards, forms, tables, modals
+- ecommerce: Products, carts, checkout
 
-Each category contains multiple blocks, and each block has multiple variants.`,
+For templates / kits / Catalyst use list_products, list_templates, list_kits, list_catalyst.`,
       inputSchema: {},
     },
     async () => {
@@ -52,7 +77,8 @@ Each category contains multiple blocks, and each block has multiple variants.`,
               text: JSON.stringify(
                 {
                   error: "CATALOG_EMPTY",
-                  message: "No catalog found. Run sync-catalog first.",
+                  message:
+                    "No UI-block catalog found. Run: tailwind-plus-mcp sync-catalog --metadata-only",
                 },
                 null,
                 2
@@ -67,30 +93,25 @@ Each category contains multiple blocks, and each block has multiple variants.`,
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({ categories }, null, 2),
+            text: JSON.stringify({ categories, server: BRAND.displayName }, null, 2),
           },
         ],
       };
     }
   );
 
-  // Tool 2: list_blocks
   server.registerTool(
     "list_blocks",
     {
       title: "List Blocks",
-      description: `List all blocks in a category with variant counts.
+      description: `List all UI blocks in a category with variant counts.
 
 EXAMPLES:
-- category="marketing" → Heroes, Testimonials, Pricing, CTAs...
-- category="application-ui", subcategory="forms" → Form layouts, Sign-in...
-
-Returns block names, slugs, descriptions, and variant counts.`,
+- category="marketing" → Heroes, Testimonials, Pricing...
+- category="application-ui", subcategory="forms" → Form layouts, Sign-in...`,
       inputSchema: {
-        category: z
-          .enum(["marketing", "application-ui", "ecommerce"])
-          .describe("Category to list blocks for"),
-        subcategory: z.string().optional().describe("Filter by subcategory (e.g., 'sections', 'forms')"),
+        category: z.enum(["marketing", "application-ui", "ecommerce"]).describe("Category"),
+        subcategory: z.string().optional().describe("Filter by subcategory (e.g. sections, forms)"),
       },
     },
     async ({ category, subcategory }) => {
@@ -105,7 +126,7 @@ Returns block names, slugs, descriptions, and variant counts.`,
                 {
                   error: "NO_BLOCKS",
                   message: subcategory
-                    ? `No blocks found in ${category}/${subcategory}. Try without subcategory filter.`
+                    ? `No blocks found in ${category}/${subcategory}.`
                     : `No blocks found in ${category}. Run sync-catalog first.`,
                 },
                 null,
@@ -117,46 +138,46 @@ Returns block names, slugs, descriptions, and variant counts.`,
         };
       }
 
-      const result = {
-        category,
-        subcategory: subcategory || "all",
-        blockCount: blocks.length,
-        blocks: blocks.map((b) => ({
-          name: b.name,
-          slug: b.slug,
-          subcategory: b.subcategory,
-          variantCount: b.variantCount,
-          description: b.description,
-        })),
-      };
-
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                category,
+                subcategory: subcategory || "all",
+                blockCount: blocks.length,
+                blocks: blocks.map((b) => ({
+                  name: b.name,
+                  slug: b.slug,
+                  subcategory: b.subcategory,
+                  variantCount: b.variantCount,
+                  description: b.description,
+                })),
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
     }
   );
 
-  // Tool 3: list_variants
   server.registerTool(
     "list_variants",
     {
       title: "List Variants",
-      description: `List all variants for a specific block.
+      description: `List all variants for a UI block.
 
-EXAMPLE:
-- category="marketing", block="testimonials"
-- Returns: Simple centered, With large avatar, Grid, etc.
-
-Use these variant slugs with get_variant to fetch code.`,
+EXAMPLE: category="marketing", block="testimonials"
+→ Simple centered, With large avatar, Grid, …`,
       inputSchema: {
-        category: z
-          .enum(["marketing", "application-ui", "ecommerce"])
-          .describe("Category containing the block"),
-        block: z.string().describe("Block slug (e.g., 'testimonials', 'heroes')"),
+        category: z.enum(["marketing", "application-ui", "ecommerce"]).describe("Category"),
+        block: z.string().describe("Block slug (e.g. testimonials, heroes)"),
       },
     },
     async ({ category, block: blockSlug }) => {
-      // Find the block - need to search across subcategories
       const blocks = catalogManager.getBlocks(category as Context);
       const block = blocks.find((b) => b.slug === blockSlug);
 
@@ -168,8 +189,8 @@ Use these variant slugs with get_variant to fetch code.`,
               text: JSON.stringify(
                 {
                   error: "BLOCK_NOT_FOUND",
-                  message: `Block '${blockSlug}' not found in ${category}. Use list_blocks to see available blocks.`,
-                  availableBlocks: blocks.slice(0, 10).map((b) => b.slug),
+                  message: `Block '${blockSlug}' not found in ${category}.`,
+                  availableBlocks: blocks.slice(0, 15).map((b) => b.slug),
                 },
                 null,
                 2
@@ -180,58 +201,65 @@ Use these variant slugs with get_variant to fetch code.`,
         };
       }
 
-      const result = {
-        block: {
-          name: block.name,
-          slug: block.slug,
-          category: block.category,
-          subcategory: block.subcategory,
-          description: block.description,
-        },
-        variantCount: block.variants.length,
-        variants: block.variants.map((v) => ({
-          index: v.index,
-          name: v.name,
-          slug: v.slug,
-        })),
-      };
-
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                block: {
+                  name: block.name,
+                  slug: block.slug,
+                  category: block.category,
+                  subcategory: block.subcategory,
+                  description: block.description,
+                },
+                variantCount: block.variants.length,
+                variants: block.variants.map((v) => ({
+                  index: v.index,
+                  name: v.name,
+                  slug: v.slug,
+                })),
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
     }
   );
 
-  // Tool 4: get_variant
   server.registerTool(
     "get_variant",
     {
       title: "Get Variant Code",
-      description: `Fetch the full source code for a specific variant.
-
-AUTHENTICATION: Requires valid Tailwind Plus subscription.
-If not authenticated, use the 'login' tool to open a browser for authentication.
+      description: `Fetch full source for a UI-block variant (requires Tailwind Plus auth).
 
 PARAMETERS:
-- category: "marketing", "application-ui", or "ecommerce"
-- block: Block slug (e.g., "testimonials")
-- variant: Variant slug (e.g., "simple-centered")
-- format: "react", "vue", or "html"
-- version: "v4.1" (latest) or "v3.4" (legacy)
-- theme: "light" or "dark"
+- format: react | vue | html
+- version: v4 (latest v4.x) or v3.4 — site currently ships Tailwind CSS v4.3 content under the v4 picker
+- theme: light | dark | system (Aug 2025+ dual-mode support)
 
-Code is cached for 7 days after first fetch.`,
+HTML interactive snippets may need Tailwind Plus Elements (notes returned when detected).
+Code is cached 7 days.`,
       inputSchema: {
-        category: z.enum(["marketing", "application-ui", "ecommerce"]).describe("Category"),
+        category: z.enum(["marketing", "application-ui", "ecommerce"]),
         block: z.string().describe("Block slug"),
         variant: z.string().describe("Variant slug (kebab-case)"),
-        format: z.enum(["react", "vue", "html"]).optional().default("react"),
-        version: z.enum(["v4.1", "v3.4"]).optional().default("v4.1"),
-        theme: z.enum(["light", "dark"]).optional().default("light"),
+        format: z.enum(["react", "vue", "html"]).optional().default(DEFAULT_FORMAT),
+        version: versionSchema,
+        theme: themeSchema,
       },
     },
-    async ({ category, block: blockSlug, variant: variantSlug, format = "react", version = "v4.1", theme = "light" }) => {
-      // Check auth
+    async ({
+      category,
+      block: blockSlug,
+      variant: variantSlug,
+      format = DEFAULT_FORMAT,
+      version = DEFAULT_TAILWIND_VERSION,
+      theme = DEFAULT_THEME,
+    }) => {
       const authState = checkAuthState();
       if (!authState.isAuthenticated) {
         return {
@@ -242,7 +270,7 @@ Code is cached for 7 days after first fetch.`,
                 {
                   error: "AUTH_REQUIRED",
                   message: "Authentication required to fetch component code.",
-                  action: "Use the 'login' tool to open a browser and authenticate with your Tailwind Plus account.",
+                  action: "Use the 'login' tool to authenticate with your Tailwind Plus account.",
                   cookiesExist: authState.cookiesExist,
                   cookiesExpired: authState.cookiesExpired,
                 },
@@ -255,7 +283,6 @@ Code is cached for 7 days after first fetch.`,
         };
       }
 
-      // Check cache first
       const cached = await cacheManager.getVariant(
         category as Context,
         blockSlug,
@@ -277,9 +304,11 @@ Code is cached for 7 days after first fetch.`,
                   variantName: cached.variantName,
                   format: cached.format,
                   version: cached.version,
+                  resolvedVersion: cached.resolvedVersion,
                   theme: cached.theme,
                   code: cached.code,
                   dependencies: cached.dependencies,
+                  notes: cached.notes,
                   cached: true,
                   cachedAt: cached.cachedAt,
                 },
@@ -291,7 +320,6 @@ Code is cached for 7 days after first fetch.`,
         };
       }
 
-      // Find block to get subcategory and variant index
       const blocks = catalogManager.getBlocks(category as Context);
       const block = blocks.find((b) => b.slug === blockSlug);
 
@@ -300,14 +328,10 @@ Code is cached for 7 days after first fetch.`,
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(
-                {
-                  error: "BLOCK_NOT_FOUND",
-                  message: `Block '${blockSlug}' not found. Use list_blocks first.`,
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify({
+                error: "BLOCK_NOT_FOUND",
+                message: `Block '${blockSlug}' not found. Use list_blocks first.`,
+              }),
             },
           ],
           isError: true,
@@ -315,28 +339,22 @@ Code is cached for 7 days after first fetch.`,
       }
 
       const variant = block.variants.find((v) => v.slug === variantSlug);
-
       if (!variant) {
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(
-                {
-                  error: "VARIANT_NOT_FOUND",
-                  message: `Variant '${variantSlug}' not found in ${blockSlug}. Use list_variants first.`,
-                  availableVariants: block.variants.map((v) => v.slug),
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify({
+                error: "VARIANT_NOT_FOUND",
+                message: `Variant '${variantSlug}' not found in ${blockSlug}.`,
+                availableVariants: block.variants.map((v) => v.slug),
+              }),
             },
           ],
           isError: true,
         };
       }
 
-      // Fetch from website
       try {
         const fetcher = createVariantFetcher();
         const code = await fetcher.fetchVariantCode(
@@ -349,7 +367,6 @@ Code is cached for 7 days after first fetch.`,
           theme as Theme
         );
 
-        // Cache for future use
         await cacheManager.setVariant(code);
 
         return {
@@ -363,9 +380,11 @@ Code is cached for 7 days after first fetch.`,
                   variantName: code.variantName,
                   format: code.format,
                   version: code.version,
+                  resolvedVersion: code.resolvedVersion,
                   theme: code.theme,
                   code: code.code,
                   dependencies: code.dependencies,
+                  notes: code.notes,
                   cached: false,
                 },
                 null,
@@ -384,34 +403,63 @@ Code is cached for 7 days after first fetch.`,
     }
   );
 
-  // Tool 5: search
   server.registerTool(
     "search",
     {
       title: "Search Components",
-      description: `Search across all blocks and variants.
-
-EXAMPLES:
-- "testimonial grid" → Grid testimonial variant
-- "pricing table" → Pricing blocks and variants
-- "modal dialog" → Modal and dialog components
-
-Returns ranked results by relevance.`,
+      description: `Search UI blocks/variants, plus templates, kits, and Catalyst by keyword.`,
       inputSchema: {
         query: z.string().describe("Search term"),
         category: z
           .enum(["marketing", "application-ui", "ecommerce"])
           .optional()
-          .describe("Limit to category"),
-        limit: z.number().optional().default(10).describe("Max results"),
+          .describe("Limit UI-block search to a category"),
+        limit: z.number().optional().default(10),
+        includeProducts: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe("Also search templates, kits, and Catalyst"),
       },
     },
-    async ({ query, category, limit = 10 }) => {
+    async ({ query, category, limit = 10, includeProducts = true }) => {
       const results = search(query, catalogManager, {
         category: category as Context | undefined,
         limit,
         includeVariants: true,
       });
+
+      const productHits: Array<Record<string, unknown>> = [];
+      if (includeProducts) {
+        const q = query.toLowerCase();
+        for (const t of TEMPLATES) {
+          const hay = `${t.name} ${t.tagline} ${t.description} ${t.slug}`.toLowerCase();
+          if (hay.includes(q) || q.split(/\s+/).some((w) => hay.includes(w))) {
+            productHits.push({
+              type: t.kind === "kit" ? "kit" : "template",
+              name: t.name,
+              slug: t.slug,
+              tagline: t.tagline,
+              url: t.url,
+              relevance: hay.includes(q) ? 0.95 : 0.7,
+            });
+          }
+        }
+        for (const c of CATALYST_COMPONENTS) {
+          const hay = `${c.name} ${c.slug} ${c.group}`.toLowerCase();
+          if (hay.includes(q)) {
+            productHits.push({
+              type: "catalyst",
+              name: c.name,
+              slug: c.slug,
+              group: c.group,
+              docsUrl: c.docsUrl,
+              relevance: 0.85,
+            });
+          }
+        }
+        productHits.sort((a, b) => (b.relevance as number) - (a.relevance as number));
+      }
 
       return {
         content: [
@@ -423,6 +471,7 @@ Returns ranked results by relevance.`,
                 category: category || "all",
                 resultCount: results.length,
                 results,
+                products: productHits.slice(0, limit),
               },
               null,
               2
@@ -433,31 +482,20 @@ Returns ranked results by relevance.`,
     }
   );
 
-  // Tool 6: suggest
   server.registerTool(
     "suggest",
     {
       title: "Suggest Components",
-      description: `Get context-aware suggestions based on what you're building.
+      description: `Context-aware UI-block suggestions for what you're building.
 
-EXAMPLES:
-- "SaaS landing page" → Heroes, pricing, testimonials, CTAs
-- "admin dashboard" → Sidebars, tables, stats, forms
-- "ecommerce store" → Products, carts, checkout
-
-Helps find complementary components.`,
+EXAMPLES: "SaaS landing page", "admin dashboard", "ecommerce store"`,
       inputSchema: {
         building: z.string().describe("What you're building"),
-        alreadyUsed: z
-          .array(z.string())
-          .optional()
-          .default([])
-          .describe("Block slugs to exclude"),
+        alreadyUsed: z.array(z.string()).optional().default([]).describe("Block slugs to exclude"),
       },
     },
     async ({ building, alreadyUsed = [] }) => {
       const suggestions = suggest(building, catalogManager, alreadyUsed);
-
       return {
         content: [
           {
@@ -478,33 +516,224 @@ Helps find complementary components.`,
     }
   );
 
-  // Tool 7: check_status
+  server.registerTool(
+    "list_products",
+    {
+      title: "List Tailwind Plus Product Surfaces",
+      description: `Overview of everything in Tailwind Plus: UI Blocks, Templates, Kits (Oatmeal), and Catalyst UI Kit — with how this MCP accesses each.`,
+      inputSchema: {},
+    },
+    async () => {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                server: BRAND.displayName,
+                version: PACKAGE_VERSION,
+                ...productOverview(),
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "list_templates",
+    {
+      title: "List Templates",
+      description: `List Tailwind Plus site templates (Next.js). Metadata + product URLs only — zips download from your account, not via this MCP.`,
+      inputSchema: {
+        includeKits: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Include kit products (e.g. Oatmeal) in the list"),
+      },
+    },
+    async ({ includeKits = false }) => {
+      const items = includeKits ? TEMPLATES : listTemplatesOnly();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                count: items.length,
+                templates: items,
+                note: "Templates are zip downloads from Tailwind Plus. This tool provides discovery metadata for license holders.",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "list_kits",
+    {
+      title: "List Kits",
+      description: `List Tailwind Plus kits (e.g. Oatmeal multi-theme marketing kit).`,
+      inputSchema: {},
+    },
+    async () => {
+      const kits = listKits();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                count: kits.length,
+                kits,
+                note: "Kits are mix-and-match section libraries delivered as downloads. Oatmeal uses Tailwind Plus Elements.",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_template",
+    {
+      title: "Get Template / Kit Details",
+      description: `Get metadata for a template or kit by slug (oatmeal, radiant, compass, …).`,
+      inputSchema: {
+        slug: z.string().describe("Template or kit slug"),
+      },
+    },
+    async ({ slug }) => {
+      const t = getTemplate(slug);
+      if (!t) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: "NOT_FOUND",
+                message: `No template/kit '${slug}'.`,
+                available: TEMPLATES.map((x) => x.slug),
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ template: t }, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "list_catalyst",
+    {
+      title: "List Catalyst Components",
+      description: `List Catalyst UI Kit components with docs URLs (catalyst.tailwindui.com). Catalyst is a zip starter kit, not UI-block scrapes.`,
+      inputSchema: {
+        group: z.string().optional().describe("Filter by group (Forms, Layouts, …)"),
+      },
+    },
+    async ({ group }) => {
+      let items = CATALYST_COMPONENTS;
+      if (group) {
+        const g = group.toLowerCase();
+        items = items.filter((c) => c.group.toLowerCase().includes(g));
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                count: items.length,
+                components: items,
+                productUrl: "https://tailwindcss.com/plus/ui-kit",
+                docs: "https://catalyst.tailwindui.com/docs",
+                stack: ["Tailwind CSS v4.2+", "React 19", "Headless UI v2.1", "TypeScript"],
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_catalyst_component",
+    {
+      title: "Get Catalyst Component Info",
+      description: `Lookup a Catalyst component by slug and return its documentation URL.`,
+      inputSchema: {
+        slug: z.string().describe("Component slug (e.g. combobox, sidebar-layout)"),
+      },
+    },
+    async ({ slug }) => {
+      const c = getCatalystComponent(slug);
+      if (!c) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: "NOT_FOUND",
+                available: CATALYST_COMPONENTS.map((x) => x.slug),
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                component: c,
+                note: "Source lives in the Catalyst zip from your Tailwind Plus account. Docs describe the public API.",
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
   server.registerTool(
     "check_status",
     {
       title: "Check Status",
-      description: `Check authentication status, catalog availability, and cache statistics.
-
-Use this tool to diagnose issues or verify the system is ready to fetch components.
-
-RETURNS:
-- authentication: Login status and guidance if action needed
-- catalog: Whether component metadata is synced
-- cache: Number of cached variants and storage used`,
+      description: `Auth, UI-block catalog, product catalog, and cache stats for ${BRAND.displayName}.`,
       inputSchema: {},
     },
     async () => {
       const authState = checkAuthState();
       const catalogStats = catalogManager.getEnhancedStats();
       const cacheStats = cacheManager.getVariantStats();
+      const products = buildProductsCatalog();
 
-      // Determine auth status and action
       let authStatus: "authenticated" | "expired" | "not_logged_in";
       let authAction: string | undefined;
 
-      if (authState.isAuthenticated) {
-        authStatus = "authenticated";
-      } else if (authState.cookiesExpired) {
+      if (authState.isAuthenticated) authStatus = "authenticated";
+      else if (authState.cookiesExpired) {
         authStatus = "expired";
         authAction = "Use the 'login' tool to re-authenticate.";
       } else {
@@ -512,130 +741,122 @@ RETURNS:
         authAction = "Use the 'login' tool to authenticate with your Tailwind Plus account.";
       }
 
-      const result = {
-        authentication: {
-          status: authStatus,
-          lastLoginAt: authState.lastLoginAt ? new Date(authState.lastLoginAt).toISOString() : undefined,
-          action: authAction,
-        },
-        catalog: {
-          status: catalogStats ? "synced" : "not_synced",
-          totalBlocks: catalogStats?.totalBlocks ?? 0,
-          totalVariants: catalogStats?.totalVariants ?? 0,
-          action: catalogStats ? undefined : "Run CLI: bun run src/index.ts sync-catalog",
-        },
-        cache: {
-          totalCachedVariants: cacheStats.totalVariants,
-          sizeBytes: cacheStats.totalSize,
-        },
-      };
-
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                server: BRAND.displayName,
+                package: BRAND.packageName,
+                version: PACKAGE_VERSION,
+                dataDir: "~/.tailwind-plus-mcp",
+                note: "Isolated from legacy mcp-for-tailwind (~/.tailwind-mcp) so both can run side-by-side.",
+                authentication: {
+                  status: authStatus,
+                  lastLoginAt: authState.lastLoginAt
+                    ? new Date(authState.lastLoginAt).toISOString()
+                    : undefined,
+                  source: authState.source,
+                  action: authAction,
+                },
+                catalog: {
+                  status: catalogStats ? "synced" : "not_synced",
+                  totalBlocks: catalogStats?.totalBlocks ?? 0,
+                  totalVariants: catalogStats?.totalVariants ?? 0,
+                  action: catalogStats
+                    ? undefined
+                    : "Run: tailwind-plus-mcp sync-catalog --metadata-only",
+                },
+                products: {
+                  templates: products.templates.filter((t) => t.kind === "template").length,
+                  kits: products.templates.filter((t) => t.kind === "kit").length,
+                  catalystComponents: products.catalyst.length,
+                },
+                cache: {
+                  totalCachedVariants: cacheStats.totalVariants,
+                  sizeBytes: cacheStats.totalSize,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
     }
   );
 
-  // Tool 8: login
   server.registerTool(
     "login",
     {
       title: "Login to Tailwind Plus",
-      description: `Launch a browser window for Tailwind Plus authentication.
-
-IMPORTANT: This opens a visible browser window. The user must be present at the machine to complete login.
-
-FLOW:
-1. Browser opens to Tailwind Plus login page
-2. User logs in with their credentials
-3. Browser closes automatically after successful login
-4. Cookies are saved for future requests
-
-TIMEOUT: 5 minutes to complete login.`,
+      description: `Open a browser for Tailwind Plus authentication. Cookies are saved under ~/.tailwind-plus-mcp (not the legacy mcp-for-tailwind dir).`,
       inputSchema: {},
     },
     async () => {
-      // Check if already authenticated
       const authState = checkAuthState();
       if (authState.isAuthenticated) {
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "already_authenticated",
-                  message: "Already logged in to Tailwind Plus.",
-                  lastLoginAt: authState.lastLoginAt ? new Date(authState.lastLoginAt).toISOString() : undefined,
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify({
+                status: "already_authenticated",
+                message: "Already logged in to Tailwind Plus.",
+                lastLoginAt: authState.lastLoginAt
+                  ? new Date(authState.lastLoginAt).toISOString()
+                  : undefined,
+                source: authState.source,
+              }),
             },
           ],
         };
       }
 
       try {
-        // Launch browser for login
         await login();
-
-        // Verify login succeeded
         const newAuthState = checkAuthState();
         if (newAuthState.isAuthenticated) {
           return {
             content: [
               {
                 type: "text" as const,
-                text: JSON.stringify(
-                  {
-                    status: "success",
-                    message: "Successfully logged in to Tailwind Plus!",
-                    nextSteps: [
-                      "Use 'list_categories' to browse available components",
-                      "Use 'search' to find specific components",
-                      "Use 'get_variant' to fetch component code",
-                    ],
-                  },
-                  null,
-                  2
-                ),
+                text: JSON.stringify({
+                  status: "success",
+                  message: "Successfully logged in to Tailwind Plus!",
+                  nextSteps: [
+                    "sync-catalog --metadata-only (CLI) to build UI block index",
+                    "list_products to see templates / kits / Catalyst",
+                    "get_variant to fetch UI block code",
+                  ],
+                }),
               },
             ],
-          };
-        } else {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify(
-                  {
-                    status: "failed",
-                    message: "Login was not completed. Please try again.",
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-            isError: true,
           };
         }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                status: "failed",
+                message: "Login was not completed. Please try again.",
+              }),
+            },
+          ],
+          isError: true,
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "error",
-                  message: `Login failed: ${message}`,
-                  hint: "Ensure you have a browser installed and are at the machine to complete login.",
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify({
+                status: "error",
+                message: `Login failed: ${message}`,
+              }),
             },
           ],
           isError: true,
@@ -647,10 +868,8 @@ TIMEOUT: 5 minutes to complete login.`,
   return server;
 }
 
-// Create the Hono app
 const app = new Hono();
 
-// MCP endpoint
 app.all("/mcp", async (c) => {
   const server = createMcpServer();
   const transport = new StreamableHTTPTransport();
@@ -658,15 +877,15 @@ app.all("/mcp", async (c) => {
   return transport.handleRequest(c);
 });
 
-// Health check endpoint
 app.get("/health", (c) => {
   const authState = checkAuthState();
   const stats = cacheManager.getVariantStats();
 
   return c.json({
     status: "ok",
-    server: "mcp-for-tailwind",
-    version: "0.2.0",
+    server: BRAND.mcpServerName,
+    displayName: BRAND.displayName,
+    version: PACKAGE_VERSION,
     authenticated: authState.isAuthenticated,
     cache: {
       totalVariants: stats.totalVariants,
@@ -675,16 +894,13 @@ app.get("/health", (c) => {
   });
 });
 
-// Root endpoint
 app.get("/", (c) => {
   return c.json({
-    name: "mcp-for-tailwind",
-    version: "0.2.0",
-    description: "MCP server for Tailwind Plus UI components with variant-level access",
-    endpoints: {
-      mcp: "/mcp",
-      health: "/health",
-    },
+    name: BRAND.displayName,
+    package: BRAND.packageName,
+    version: PACKAGE_VERSION,
+    description: BRAND.description,
+    endpoints: { mcp: "/mcp", health: "/health" },
     tools: [
       "list_categories",
       "list_blocks",
@@ -692,6 +908,12 @@ app.get("/", (c) => {
       "get_variant",
       "search",
       "suggest",
+      "list_products",
+      "list_templates",
+      "list_kits",
+      "get_template",
+      "list_catalyst",
+      "get_catalyst_component",
       "check_status",
       "login",
     ],
@@ -701,11 +923,10 @@ app.get("/", (c) => {
 export { app };
 export default app;
 
-// Start server for local development
 export async function startServer(port = 3000) {
   const { serve } = await import("@hono/node-server");
 
-  console.log(`mcp-for-tailwind v0.2.0`);
+  console.log(`${BRAND.displayName} v${PACKAGE_VERSION}`);
   console.log(`Running on http://localhost:${port}`);
   console.log(`MCP endpoint: http://localhost:${port}/mcp`);
   console.log("");
@@ -721,22 +942,19 @@ export async function startServer(port = 3000) {
 
   const catalogStats = catalogManager.getEnhancedStats();
   if (catalogStats) {
-    console.log(`Catalog: ${catalogStats.totalBlocks} blocks, ${catalogStats.totalVariants} variants`);
+    console.log(
+      `Catalog: ${catalogStats.totalBlocks} blocks, ${catalogStats.totalVariants} variants`
+    );
   } else {
     console.log("Catalog: Not synced - run 'sync-catalog' first");
   }
   console.log("");
 
-  serve({
-    fetch: app.fetch,
-    port,
-  });
+  serve({ fetch: app.fetch, port });
 }
 
-// Start server in stdio mode (for MCP clients like Claude Desktop)
-export async function startStdioServer(): Promise<void> {
+export async function startStdioServer() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
-
   await server.connect(transport);
 }

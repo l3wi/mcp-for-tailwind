@@ -8,7 +8,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import type { CookieData, AuthState } from "../types/index.ts";
-import { CONFIG_DIR, COOKIES_PATH, CACHE_DIR, getRandomUserAgent } from "../config.ts";
+import {
+  CONFIG_DIR,
+  COOKIES_PATH,
+  CACHE_DIR,
+  LEGACY_COOKIES_PATH,
+  LEGACY_CONFIG_DIR,
+  getRandomUserAgent,
+} from "../config.ts";
 import { AuthRequiredError, AuthExpiredError } from "../errors/index.ts";
 
 // Cache directory for downloaded browser
@@ -178,12 +185,31 @@ export async function closeBrowser(): Promise<void> {
 
 /**
  * Load saved authentication cookies.
+ * If this unofficial install has no cookies yet, seed from legacy ~/.tailwind-mcp
+ * so users who already logged in via mcp-for-tailwind don't need to re-auth.
  */
 export function loadCookies(): CookieData | null {
   try {
     if (existsSync(COOKIES_PATH)) {
       const data = readFileSync(COOKIES_PATH, "utf-8");
       return JSON.parse(data) as CookieData;
+    }
+
+    // One-time seed from legacy package data dir
+    if (existsSync(LEGACY_COOKIES_PATH)) {
+      const data = readFileSync(LEGACY_COOKIES_PATH, "utf-8");
+      const parsed = JSON.parse(data) as CookieData;
+      if (!existsSync(CONFIG_DIR)) {
+        mkdirSync(CONFIG_DIR, { recursive: true });
+      }
+      writeFileSync(COOKIES_PATH, JSON.stringify(parsed, null, 2));
+      chmodSync(COOKIES_PATH, 0o600);
+      if (process.env.TWPLUS_VERBOSE === "1") {
+        console.log(
+          `Seeded auth cookies from legacy install (${LEGACY_CONFIG_DIR}) → ${CONFIG_DIR}`
+        );
+      }
+      return parsed;
     }
   } catch {
     // Ignore errors - treat as no cookies
@@ -227,6 +253,7 @@ export function saveCookies(cookies: Array<{
  * Check authentication state.
  */
 export function checkAuthState(): AuthState {
+  const hadLocal = existsSync(COOKIES_PATH);
   const cookieData = loadCookies();
 
   if (!cookieData) {
@@ -248,6 +275,7 @@ export function checkAuthState(): AuthState {
     cookiesExist: true,
     cookiesExpired: !hasValidCookies,
     lastLoginAt: cookieData.savedAt,
+    source: hadLocal ? "current" : "legacy-seeded",
   };
 }
 
@@ -432,7 +460,7 @@ export async function fetchBlockIndex(): Promise<BlockIndexEntry[]> {
             const nameMatch = textContent.match(/^(.+?)(\d+\s+(?:components?|examples?))/);
             const countMatch = textContent.match(/(\d+)\s+(?:components?|examples?)/);
 
-            if (nameMatch && countMatch) {
+            if (nameMatch?.[1] && countMatch?.[1]) {
               const name = nameMatch[1].trim();
               const count = parseInt(countMatch[1], 10);
 

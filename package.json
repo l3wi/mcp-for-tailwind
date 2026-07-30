@@ -1,7 +1,7 @@
 {
-  "name": "mcp-for-tailwind",
-  "version": "0.2.0",
-  "description": "MCP (Model Context Protocol) server for Tailwind Plus UI components - enables LLM-assisted development with licensed components",
+  "name": "tailwind-plus-mcp",
+  "version": "0.3.0",
+  "description": "Tailwind Plus MCP (Unofficial) — MCP server for Tailwind Plus license holders: UI blocks, templates, kits, and Catalyst metadata for LLM-assisted development",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
   "keywords": [
@@ -13,13 +13,14 @@
     "model-context-protocol",
     "cli",
     "components",
-    "llm"
+    "llm",
+    "unofficial"
   ],
   "engines": {
     "node": ">=18.0.0"
   },
   "bin": {
-    "mcp-for-tailwind": "./build/index.js"
+    "tailwind-plus-mcp": "./build/index.js"
   },
   "main": "./build/index.js",
   "exports": {

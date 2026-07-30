@@ -1,147 +1,102 @@
-# Tailwind-MCP AI Tool Guide
+# Tailwind Plus MCP (Unofficial) — AI Tool Guide
 
-This guide helps AI assistants effectively use the Tailwind Plus MCP server.
+This guide helps AI assistants use the **Tailwind Plus MCP (Unofficial)** server effectively.
 
-## Quick Start
+## Quick start
 
-1. **Check status first**: `get_catalog_status` to verify auth and catalog
-2. **Browse categories**: `list_categories` with optional context filter
-3. **Search by keyword**: `search_components` for specific needs
-4. **Fetch code**: `get_component` with slug from search results
+1. **`check_status`** — verify auth + catalog
+2. **`list_products`** — see UI blocks / templates / kits / Catalyst
+3. **`search`** or **`list_categories` → `list_blocks` → `list_variants`**
+4. **`get_variant`** — fetch code (requires auth)
 
-## Available Tools
+If catalog is empty: ask the user to run  
+`tailwind-plus-mcp sync-catalog --metadata-only`
 
-| Tool | Purpose | Auth Required |
-|------|---------|---------------|
-| `list_categories` | Browse all component categories | No |
-| `search_components` | Search by keyword | No |
-| `get_component` | Fetch component source code | Yes |
-| `suggest_components` | Get AI-powered suggestions | No |
-| `get_catalog_status` | Check system health | No |
-| `sync_catalog` | Refresh catalog from source | Yes |
+## Tools
 
-## Contexts
+### UI Blocks
 
-Tailwind Plus organizes components into three contexts:
+| Tool | Auth | Purpose |
+|------|------|---------|
+| `list_categories` | No | marketing / application-ui / ecommerce |
+| `list_blocks` | No | Blocks in a category |
+| `list_variants` | No | Variants for a block |
+| `get_variant` | Yes | Source code |
+| `search` | No | Search blocks + products |
+| `suggest` | No | Suggestions for what you're building |
 
-- **marketing** (~23 categories): Landing pages, hero sections, pricing, testimonials, footers, headers, banners
-- **application-ui** (~49 categories): Dashboards, forms, tables, navigation, modals, alerts, sidebars
-- **ecommerce** (~21 categories): Product pages, shopping carts, checkout, order history, reviews
+### Products (metadata)
 
-## Typical Workflows
+| Tool | Purpose |
+|------|---------|
+| `list_products` | Full surface overview |
+| `list_templates` | Next.js site templates |
+| `list_kits` | Kits (Oatmeal, …) |
+| `get_template` | One template/kit by slug |
+| `list_catalyst` | Catalyst components + docs URLs |
+| `get_catalyst_component` | One Catalyst component |
 
-### Building a Marketing Landing Page
+### Auth
 
-```
-1. list_categories(context: "marketing")
-   → See: Hero Sections, Feature Sections, Pricing, Testimonials, Footer
+| Tool | Purpose |
+|------|---------|
+| `check_status` | Health |
+| `login` | Browser login |
 
-2. get_component(categorySlug: "sections/heroes", context: "marketing", componentIndex: 0)
-   → Get first hero variant
-
-3. search_components(query: "pricing", context: "marketing")
-   → Find pricing section options
-
-4. suggest_components(building: "SaaS landing page", alreadyUsed: ["sections/heroes"])
-   → Get complementary suggestions (CTAs, testimonials, etc.)
-```
-
-### Building an Admin Dashboard
+## `get_variant` parameters
 
 ```
-1. list_categories(context: "application-ui")
-   → Explore: Sidebar Layouts, Tables, Forms, Modal Dialogs
-
-2. get_component(categorySlug: "application-shells/sidebar", context: "application-ui")
-   → Get shell layout first
-
-3. search_components(query: "table", context: "application-ui")
-   → Find data table options
-
-4. get_component(categorySlug: "lists/tables", context: "application-ui", componentIndex: 0)
-   → Fetch a specific table component
+category: marketing | application-ui | ecommerce
+block:    heroes | testimonials | …
+variant:  simple-centered | …
+format:   react | vue | html     (default react)
+version:  v4 | v3.4              (default v4 → latest v4.x on page)
+theme:    light | dark | system  (default light)
 ```
 
-### Building an Ecommerce Store
+Notes:
+
+- Tailwind Plus currently targets **Tailwind CSS v4.3** content under the v4 picker.
+- **system** theme returns dual-mode snippets (dark: variants).
+- HTML interactive blocks may list **`@tailwindplus/elements`** in dependencies/notes.
+
+## Typical workflows
+
+### SaaS landing page (UI blocks)
 
 ```
-1. list_categories(context: "ecommerce")
-   → See: Product Lists, Shopping Carts, Checkout Forms, etc.
-
-2. get_component(categorySlug: "components/product-lists", context: "ecommerce")
-   → Get product list component
-
-3. suggest_components(building: "online store checkout flow")
-   → Get suggestions for cart, checkout, order summary
+1. list_categories
+2. list_blocks(category="marketing")
+3. get_variant(category="marketing", block="heroes", variant="simple-centered", format="react", version="v4", theme="system")
+4. suggest(building="SaaS landing page", alreadyUsed=["heroes"])
 ```
 
-## Error Handling
+### Prefer a full template
 
-| Error Code | Meaning | Solution |
-|------------|---------|----------|
-| `AUTH_REQUIRED` | Not logged in | User runs `bun run src/index.ts login` |
-| `COMPONENT_NOT_FOUND` | Invalid slug/index | Check `list_categories` for valid slugs |
-| `Cookies expired` | Session expired | User runs `bun run src/index.ts login` |
-
-## Component Formats
-
-When calling `get_component`, you can specify:
-
-- **format**:
-  - `react` (default): JSX components with Tailwind classes
-  - `vue`: Vue Single-File Components
-  - `html`: Vanilla HTML with inline Tailwind classes
-
-- **theme**:
-  - `light` (default): Light background variant
-  - `dark`: Dark background variant
-
-- **version**:
-  - `v4.1` (default): Latest Tailwind CSS, uses CSS variables
-  - `v3.4`: Legacy version, wider compatibility
-
-## Best Practices
-
-1. **Start with `list_categories`** to understand available options
-2. **Use `search_components`** for specific needs rather than browsing all
-3. **Check `dependencies`** in returned components for required npm packages
-4. **Cache is automatic** - repeated requests are fast (7-day TTL)
-5. **Use `suggest_components`** to discover related components
-6. **Check `componentIndex`** bounds - use 0 for first variant
-
-## Response Format
-
-All tools return JSON with consistent structure:
-
-```json
-{
-  "name": "Component Name",
-  "category": "category-slug",
-  "context": "marketing|application-ui|ecommerce",
-  "format": "react|vue|html",
-  "theme": "light|dark",
-  "version": "v4.1|v3.4",
-  "dependencies": ["react", "@headlessui/react"],
-  "code": "// Full component source code..."
-}
+```
+1. list_templates
+2. get_template(slug="oatmeal") or get_template(slug="radiant")
+→ Point user to download from their Tailwind Plus account
 ```
 
-## Troubleshooting
+### App UI with Catalyst
 
-### "Not authenticated" errors
-The user needs to run the login command:
-```bash
-bun run src/index.ts login
+```
+1. list_catalyst
+2. get_catalyst_component(slug="sidebar-layout")
+→ Use docs URL; source comes from Catalyst zip
 ```
 
-### Empty or stale catalog
-Sync the catalog:
-```bash
-bun run src/index.ts sync-catalog
-```
+## Errors
 
-### Slow responses
-Components are cached after first fetch. Subsequent requests are fast.
+| Code | Meaning | Fix |
+|------|---------|-----|
+| `AUTH_REQUIRED` | Not logged in | `login` tool |
+| `CATALOG_EMPTY` / `NO_BLOCKS` | No sync | `sync-catalog --metadata-only` |
+| `BLOCK_NOT_FOUND` / `VARIANT_NOT_FOUND` | Bad slug | `list_blocks` / `list_variants` |
+| `CODE_FETCH_FAILED` | DOM/scrape issue | Retry; site UI may have changed |
 
-### Missing components
-Run `get_catalog_status` to check if the catalog needs refresh.
+## Isolation
+
+This unofficial server stores data in `~/.tailwind-plus-mcp`.  
+Legacy `mcp-for-tailwind` uses `~/.tailwind-mcp`. Both can run at once under different MCP server keys.

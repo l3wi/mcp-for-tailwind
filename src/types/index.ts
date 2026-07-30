@@ -1,24 +1,34 @@
-// Context types for the three main product categories
+// Context types for the three main UI-block product categories
 export type Context = "marketing" | "application-ui" | "ecommerce";
 
 // Format for code output
 export type CodeFormat = "react" | "vue" | "html";
 
-// Theme variants
-export type Theme = "light" | "dark";
+/**
+ * Theme variants available on Tailwind Plus UI blocks (Aug 2025+).
+ * - light: light-only snippet
+ * - dark: dark-only snippet
+ * - system: dual-mode snippet using dark: variants / prefers-color-scheme
+ */
+export type Theme = "light" | "dark" | "system";
 
-// Tailwind CSS version
-export type TailwindVersion = "v4.1" | "v3.4";
+/**
+ * Tailwind CSS version selector for code snippets.
+ * - "v4" selects the latest v4.x option on the page (currently up to v4.3 content)
+ * - "v3.4" selects the legacy v3.4 option
+ * Concrete labels (v4.0, v4.1, …) are also accepted when present in the picker.
+ */
+export type TailwindVersion = "v4" | "v3.4" | "v4.0" | "v4.1" | "v4.2" | "v4.3" | string;
 
 // Component metadata stored in catalog
 export interface ComponentMeta {
-  id: string; // Unique slug like "marketing/sections/heroes/simple-centered"
-  name: string; // Display name like "Simple centered"
-  category: string; // Category like "Hero Sections"
-  subcategory?: string; // Subcategory like "PAGE SECTIONS"
+  id: string;
+  name: string;
+  category: string;
+  subcategory?: string;
   context: Context;
-  url: string; // Full URL to component page
-  componentCount?: number; // Number of variants (for category-level entries)
+  url: string;
+  componentCount?: number;
 }
 
 // Category with its components
@@ -37,7 +47,7 @@ export interface Component extends ComponentMeta {
   format: CodeFormat;
   theme: Theme;
   version: TailwindVersion;
-  dependencies?: string[]; // npm packages needed
+  dependencies?: string[];
 }
 
 // Search result item
@@ -47,7 +57,7 @@ export interface SearchResult {
   category: string;
   context: Context;
   url: string;
-  relevance: number; // 0-1 score
+  relevance: number;
 }
 
 // Suggestion result
@@ -56,7 +66,7 @@ export interface Suggestion {
   name: string;
   category: string;
   context: Context;
-  reason: string; // Why this component is suggested
+  reason: string;
 }
 
 // Cache manifest entry
@@ -65,7 +75,7 @@ export interface CacheEntry {
   format: CodeFormat;
   theme: Theme;
   version: TailwindVersion;
-  cachedAt: number; // Unix timestamp
+  cachedAt: number;
   filePath: string;
 }
 
@@ -90,40 +100,36 @@ export interface CookieData {
 }
 
 // ============================================
-// NEW: Hierarchy Types (Category → Block → Variant)
+// Hierarchy Types (Category → Block → Variant)
 // ============================================
 
-// Individual component variant within a block
 export interface ComponentVariant {
-  index: number;           // 0-based index within block
-  name: string;            // Display name: "Simple centered"
-  slug: string;            // Kebab-case: "simple-centered"
-  componentId: string;     // Hash: "component-fd7b8bd425f42f6504b22e1ecc6b43c9"
-  previewUrl?: string;     // URL to preview iframe
+  index: number;
+  name: string;
+  slug: string;
+  componentId: string;
+  previewUrl?: string;
 }
 
-// Block containing multiple variants (e.g., Testimonials, Hero Sections)
 export interface Block {
-  name: string;            // "Testimonials"
-  slug: string;            // "testimonials"
-  category: Context;       // "marketing"
-  subcategory: string;     // "sections"
-  url: string;             // Full URL to block page
-  description?: string;    // From page description
+  name: string;
+  slug: string;
+  category: Context;
+  subcategory: string;
+  url: string;
+  description?: string;
   variantCount: number;
   variants: ComponentVariant[];
   lastFetchedAt?: number;
 }
 
-// Category info for list_categories
 export interface CategoryInfo {
-  name: string;            // "Marketing"
-  slug: Context;           // "marketing"
+  name: string;
+  slug: Context;
   blockCount: number;
   subcategories: string[];
 }
 
-// Variant code with all metadata
 export interface VariantCode {
   category: Context;
   blockSlug: string;
@@ -132,27 +138,30 @@ export interface VariantCode {
   componentId: string;
   format: CodeFormat;
   version: TailwindVersion;
+  /** Actual option label selected on the page (e.g. "v4.0") when known */
+  resolvedVersion?: string;
   theme: Theme;
   code: string;
   dependencies: string[];
+  /** Hint: HTML snippets may require Tailwind Plus Elements */
+  notes?: string[];
   cachedAt: number;
 }
 
-// Search result types
-export type SearchResultType = "category" | "block" | "variant";
+export type SearchResultType = "category" | "block" | "variant" | "template" | "kit" | "catalyst";
 
 export interface SearchResultItem {
   type: SearchResultType;
-  category: Context;
+  category?: Context | "templates" | "kits" | "catalyst";
   block?: string;
   blockName?: string;
   variant?: string;
   variantName?: string;
   variantCount?: number;
+  url?: string;
   relevance: number;
 }
 
-// Suggestion result
 export interface SuggestionResult {
   category: Context;
   block: string;
@@ -163,32 +172,28 @@ export interface SuggestionResult {
 
 // ============================================
 // Dynamic Catalog & Fetching Types
-// Used by CatalogFetcher and CatalogManager
 // ============================================
 
-// Individual UI block (component variant within a category)
 export interface UIBlock {
-  id: string;              // e.g., "marketing/sections/heroes/0"
-  index: number;           // 0-based index within category
-  name: string;            // Display name from page
-  categorySlug: string;    // e.g., "sections/heroes"
+  id: string;
+  index: number;
+  name: string;
+  categorySlug: string;
   context: Context;
-  previewUrl?: string;        // Preview image URL if available
-  lastFetchedAt?: number;     // When metadata was last fetched
+  previewUrl?: string;
+  lastFetchedAt?: number;
 }
 
-// Enhanced category with discovered blocks
 export interface CatalogCategory extends Category {
-  blocks: UIBlock[];       // Individual components discovered
-  lastFetchedAt: number;   // Timestamp of last fetch
-  isComplete: boolean;     // Whether all blocks discovered
+  blocks: UIBlock[];
+  lastFetchedAt: number;
+  isComplete: boolean;
 }
 
-// Full catalog structure (saved to disk)
 export interface Catalog {
-  version: string;         // Schema version
-  generatedAt: number;     // When catalog was generated
-  lastUpdatedAt: number;   // Last modification time
+  version: string;
+  generatedAt: number;
+  lastUpdatedAt: number;
   contexts: {
     marketing: CatalogCategory[];
     "application-ui": CatalogCategory[];
@@ -201,15 +206,11 @@ export interface Catalog {
   };
 }
 
-// ============================================
-// NEW: Enhanced Catalog v3 with Variants
-// ============================================
-
 export interface EnhancedCatalog {
   version: "3.0.0";
   generatedAt: number;
   lastUpdatedAt: number;
-  blocks: Record<string, Block>;  // Keyed by "{category}/{subcategory}/{slug}"
+  blocks: Record<string, Block>;
   stats: {
     totalBlocks: number;
     totalVariants: number;
@@ -217,17 +218,54 @@ export interface EnhancedCatalog {
   };
 }
 
-// Auth state result
+// ============================================
+// Product surfaces beyond UI Blocks
+// ============================================
+
+export type ProductKind = "ui-blocks" | "template" | "kit" | "ui-kit";
+
+export interface TemplateInfo {
+  id: string;
+  name: string;
+  slug: string;
+  kind: "template" | "kit";
+  tagline: string;
+  description: string;
+  url: string;
+  previewUrl?: string;
+  stack: string[];
+  priceNote: string;
+}
+
+export interface CatalystComponentInfo {
+  id: string;
+  name: string;
+  slug: string;
+  docsUrl: string;
+  group: string;
+  description?: string;
+}
+
+export interface ProductsCatalog {
+  version: "1.0.0";
+  generatedAt: number;
+  lastUpdatedAt: number;
+  templates: TemplateInfo[];
+  catalyst: CatalystComponentInfo[];
+  notes: string[];
+}
+
 export interface AuthState {
   isAuthenticated: boolean;
   cookiesExist: boolean;
   cookiesExpired: boolean;
   lastLoginAt?: number;
+  /** Which config dir cookies were loaded from */
+  source?: "current" | "legacy-seeded";
 }
 
-// Fetch progress event
 export interface FetchProgress {
-  phase: "catalog" | "components";
+  phase: "catalog" | "components" | "products";
   current: number;
   total: number;
   currentItem: string;
@@ -235,13 +273,11 @@ export interface FetchProgress {
   error?: string;
 }
 
-// Enhanced cache entry with TTL
 export interface CacheEntryWithTTL extends CacheEntry {
-  expiresAt: number;       // TTL expiration timestamp
-  size: number;            // File size in bytes
+  expiresAt: number;
+  size: number;
 }
 
-// Enhanced cache manifest
 export interface CacheManifestWithTTL {
   version: string;
   createdAt: number;

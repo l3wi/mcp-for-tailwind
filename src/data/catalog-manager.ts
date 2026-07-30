@@ -13,8 +13,12 @@ import {
   ENHANCED_CATALOG_PATH,
   CATALOG_REFRESH_THRESHOLD_MS,
   CONFIG_DIR,
+  LEGACY_CONFIG_DIR,
 } from "../config.ts";
+import { join } from "node:path";
 import { generateBlockKey } from "../utils/slug.ts";
+
+const LEGACY_ENHANCED_CATALOG_PATH = join(LEGACY_CONFIG_DIR, "catalog-v3.json");
 
 export class CatalogManager {
   private catalog: Catalog | null = null;
@@ -167,11 +171,30 @@ export class CatalogManager {
 
   /**
    * Load enhanced catalog from disk.
+   * Seeds once from legacy mcp-for-tailwind (~/.tailwind-mcp) if present.
    */
   loadEnhanced(): EnhancedCatalog | null {
     if (this.enhancedCatalog) return this.enhancedCatalog;
 
     if (!existsSync(ENHANCED_CATALOG_PATH)) {
+      // Seed from legacy install so unofficial package is usable without re-sync
+      if (existsSync(LEGACY_ENHANCED_CATALOG_PATH)) {
+        try {
+          const data = readFileSync(LEGACY_ENHANCED_CATALOG_PATH, "utf-8");
+          const parsed = JSON.parse(data) as EnhancedCatalog;
+          this.ensureDir();
+          writeFileSync(ENHANCED_CATALOG_PATH, JSON.stringify(parsed, null, 2));
+          this.enhancedCatalog = parsed;
+          if (process.env.TWPLUS_VERBOSE === "1") {
+            console.log(
+              `Seeded UI-block catalog from legacy install (${LEGACY_ENHANCED_CATALOG_PATH})`
+            );
+          }
+          return this.enhancedCatalog;
+        } catch {
+          // fall through
+        }
+      }
       return null;
     }
 

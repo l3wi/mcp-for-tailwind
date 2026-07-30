@@ -1,88 +1,77 @@
-# CLAUDE.md
+# CLAUDE.md — Tailwind Plus MCP (Unofficial)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI assistants working on this repository.
 
-## Project Overview
+## Project overview
 
-Tailwind MCP is an MCP (Model Context Protocol) server that provides programmatic access to Tailwind Plus (formerly Tailwind UI) components. It uses Puppeteer to fetch authenticated component code from tailwindcss.com/plus with rate limiting and progressive caching.
+**Tailwind Plus MCP (Unofficial)** (`tailwind-plus-mcp`) is an MCP server that provides programmatic access to Tailwind Plus for license holders. It uses Puppeteer to fetch authenticated UI-block code from `tailwindcss.com/plus`, and ships static discovery catalogs for templates, kits (Oatmeal), and Catalyst.
+
+This package is intentionally **isolated** from the legacy `mcp-for-tailwind` install:
+
+| | Unofficial (this repo) | Legacy |
+|---|---|---|
+| Binary | `tailwind-plus-mcp` | `mcp-for-tailwind` |
+| Data dir | `~/.tailwind-plus-mcp` | `~/.tailwind-mcp` |
+| npm name | `tailwind-plus-mcp` | `mcp-for-tailwind` |
+
+Cookies can be seeded once from the legacy dir on first run.
 
 ## Commands
 
 ```bash
-# Development
-bun run dev              # Start server with watch mode
-bun run start            # Start server without watch
-
-# Build
-bun run build            # Build to ./build for distribution
-
-# CLI Commands
-bun run src/index.ts login                    # Interactive browser login
-bun run src/index.ts serve [port]             # Start MCP server (default: 3000)
-bun run src/index.ts status                   # Check auth/catalog/cache status
-bun run src/index.ts sync-catalog             # Sync catalog metadata
-bun run src/index.ts sync-catalog --context=marketing  # Sync single context
-bun run src/index.ts prefetch                 # Pre-fetch all component code
-bun run src/index.ts prefetch --context=ecommerce --format=react
-bun run src/index.ts clear-cache              # Clear all cached components
-bun run src/index.ts clear-cache --expired    # Clear only expired entries
+bun install
+bun run dev
+bun run build
+bun run src/index.ts status
+bun run src/index.ts login
+bun run src/index.ts sync-catalog --metadata-only
+bun run src/index.ts list-products
+bun run src/index.ts list-templates
+bun run src/index.ts list-catalyst
+bun run src/index.ts get-variant --category=marketing --block=heroes --variant=simple-centered --version=v4 --theme=system
 ```
 
 ## Architecture
 
 ```
 src/
-├── index.ts                 # CLI entry point
-├── server.ts                # Hono HTTP server + 4 MCP tools
-├── config.ts                # Constants, user-agents, paths
+├── brand.ts                 # Display name, package identity
+├── index.ts                 # CLI entry
+├── server.ts                # MCP tools (stdio + HTTP)
+├── config.ts                # Paths, rate limits, defaults
 ├── browser/
-│   ├── browser.ts           # Core: getBrowser, setupPage, login, checkAuthState
-│   ├── catalog-fetcher.ts   # Phase 1: Discover categories/blocks
-│   ├── component-fetcher.ts # Phase 2: Fetch component code
-│   └── variant-fetcher.ts   # Variant-level code fetching with format/version selection
-├── cache/
-│   └── cache-manager.ts     # TTL-based cache with manifest
+│   ├── browser.ts           # Chrome lifecycle, auth, block index
+│   ├── page-controls.ts     # Format / version / theme pickers
+│   ├── variant-fetcher.ts   # Variant metadata + code fetch
+│   ├── catalog-fetcher.ts   # Legacy category seed fetch
+│   └── shared.ts            # Dependency parse helpers
+├── cache/cache-manager.ts
 ├── data/
-│   ├── catalog.ts           # Search/suggest functions + static fallback
-│   └── catalog-manager.ts   # Dynamic catalog persistence
-├── types/
-│   └── index.ts             # TypeScript interfaces
-└── utils/
-    ├── rate-limiter.ts      # Request throttling
-    └── retry.ts             # Exponential backoff
+│   ├── catalog-manager.ts   # catalog-v3 persistence
+│   ├── catalog.ts           # Static UI-block fallback
+│   ├── products.ts          # Templates, kits, Catalyst
+│   └── search.ts
+└── types/
 ```
 
-### Key Concepts
+### Key concepts
 
-- **Contexts**: Three product categories - `marketing`, `application-ui`, `ecommerce`
-- **Formats**: Code output as `react`, `vue`, or `html`
-- **Versions**: Tailwind CSS `v4.1` or `v3.4`
-- **Two-Phase Fetching**:
-  - Phase 1: Catalog sync (metadata only) - fast, builds category list
-  - Phase 2: Component fetch (actual code) - slower, on-demand with caching
-- **Authentication**: Cookies stored in `~/.tailwind-mcp/cookies.json`
-- **Dynamic Catalog**: Saved to `~/.tailwind-mcp/catalog.json`, refreshes after 24h
-- **Cache**: Components cached in `~/.tailwind-mcp/cache/` with 7-day TTL
+- **UI Blocks contexts**: `marketing`, `application-ui`, `ecommerce`
+- **Formats**: `react`, `vue`, `html`
+- **Versions**: `v4` (resolves to latest v4.x option on page) or `v3.4`
+- **Themes**: `light`, `dark`, `system`
+- **Products**: templates / kits / Catalyst — metadata only (no zip redistribution)
 
-### MCP Tools
+### MCP tools
 
-The server exposes 4 tools via `/mcp` endpoint:
+UI: `list_categories`, `list_blocks`, `list_variants`, `get_variant`, `search`, `suggest`  
+Products: `list_products`, `list_templates`, `list_kits`, `get_template`, `list_catalyst`, `get_catalyst_component`  
+Auth: `check_status`, `login`
 
-1. `list_categories` - Browse available component categories
-2. `search_components` - Keyword search across categories
-3. `get_component` - Fetch actual component code (requires auth)
-4. `suggest_components` - Context-aware suggestions
+## Working rules
 
-### Tech Stack
-
-- **Hono** - HTTP server with MCP transport via `@hono/mcp`
-- **Puppeteer** - Browser automation for authenticated fetching
-- **Zod** - Schema validation for tool inputs
-- **@modelcontextprotocol/sdk** - MCP server implementation
-
-### Rate Limiting & Resilience
-
-- 2 seconds between requests to avoid blocking
-- Realistic Chrome user-agents (rotated randomly)
-- Retry with exponential backoff (3 attempts, 1s→2s→4s)
-- Progressive saving after each successful fetch
+- Prefer dynamic discovery (`fetchBlockIndex`) over hardcoded category lists when syncing.
+- Version pickers change labels (`v4.0`, `v4.1`, …) — use `page-controls.resolveVersionOption`, never hard-require a single label.
+- Do not commit cookies, cache, or `~/.tailwind-plus-mcp` contents.
+- Do not add code that redistributes Tailwind Plus component source in the repo.
+- Keep the unofficial branding explicit in user-facing strings.

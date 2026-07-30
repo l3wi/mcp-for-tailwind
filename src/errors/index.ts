@@ -1,11 +1,11 @@
 /**
- * Custom error classes for Tailwind MCP.
+ * Custom error classes for Tailwind Plus MCP (Unofficial).
  */
 
 export class TailwindMCPError extends Error {
   constructor(public code: string, message: string) {
     super(message);
-    this.name = "TailwindMCPError";
+    this.name = "TailwindPlusMCPError";
   }
 }
 
