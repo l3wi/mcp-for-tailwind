@@ -1,145 +1,199 @@
-# mcp-for-tailwind
+# Tailwind Plus MCP (Unofficial)
 
-An MCP server that gives Tailwind Plus license holders programmatic access to their components for LLM-assisted development.
+**Unofficial** MCP server for [Tailwind Plus](https://tailwindcss.com/plus) license holders. Gives AI agents structured access to **UI Blocks** (scraped with your login), plus discovery and scaffolding for **Templates**, **Kits** (Oatmeal), and **Catalyst UI Kit**.
 
-## Motivation
+> Not affiliated with or endorsed by Tailwind Labs. Requires a valid Tailwind Plus license. This tool never redistributes component zips or ships Tailwind Plus source in the package.
 
-Tailwind Plus components are excellent—but they're messy to access with AI workflows. Copy-pasting code into AI assistants is tedious, and there's no official API.
+| | |
+|---|---|
+| **Package** | `tailwind-plus-mcp` |
+| **CLI** | `tailwind-plus-mcp` |
+| **MCP server name** | `tailwind-plus-mcp-unofficial` |
+| **Data directory** | `~/.tailwind-plus-mcp` |
+| **Version** | `0.3.1` |
+| **Repository** | https://github.com/JamesFincher/two |
 
-I built this so **Tailwind Plus license holders** can use their components naturally in LLM workflows. It's not a workaround or a hack—it authenticates with your credentials and serves only what you're already licensed to access.
+Isolated from the legacy `mcp-for-tailwind` binary (`~/.tailwind-mcp`) so both can run side-by-side.
 
-**To Tailwind Labs:** I'd love for you to adopt this. The codebase is yours to use, modify, rebrand, or ship as an official feature. This tool makes Tailwind Plus licenses *more* valuable, not less. See [LICENSE](./LICENSE) for the formal offer.
+---
 
-## Quick Start
+## For AI agents (read this first)
 
-```bash
-# 1. Install
-npm install -g mcp-for-tailwind
+Every important tool response uses a standard envelope:
 
-# 2. Login with your Tailwind Plus account
-mcp-for-tailwind login
-
-# 3. Sync the component catalog
-mcp-for-tailwind sync-catalog
+```json
+{
+  "summary": "What just happened (one sentence)",
+  "data": { },
+  "paths": { "label": "where files/data live" },
+  "nextSteps": [
+    { "action": "What you should do next", "tool": "optional_tool_name", "detail": "how" }
+  ],
+  "warnings": [],
+  "agentNotes": []
+}
 ```
 
-## MCP Configuration
+**Always follow `nextSteps` and `paths` instead of inventing locations.**
 
-**Claude Code** (`~/.claude/settings.json`):
+### Recommended workflows
+
+| Goal | Steps |
+|------|--------|
+| **Health check** | `check_status` → follow `nextSteps` |
+| **UI block code** | `list_categories` → `list_blocks` → `list_variants` → `get_variant` |
+| **Search** | `search` (blocks + templates + Catalyst) or `suggest` |
+| **Templates / Oatmeal** | `list_templates` / `list_kits` → `get_template` → tell user to download zip from their Plus account |
+| **Catalyst** | `get_catalyst_setup` → `list_catalyst` / `get_catalyst_component` / `list_catalyst_colors` → `generate_ui_kit` |
+| **Custom UI kit** | `generate_ui_kit` with `outDir` → user copies Catalyst zip into `src/components/` |
+
+### Where things go
+
+| What | Where |
+|------|--------|
+| Auth cookies | `~/.tailwind-plus-mcp/cookies.json` |
+| UI block catalog | `~/.tailwind-plus-mcp/catalog-v3.json` |
+| Fetched code cache | `~/.tailwind-plus-mcp/cache/` |
+| Scaffolded Catalyst kit | Path you pass as `outDir` (see tool `paths` in response) |
+| Setup checklist inside scaffold | `{outDir}/CATALYST_SETUP.md` |
+| Theme CSS / color map | `{outDir}/src/styles/theme.css`, `{outDir}/src/theme/catalyst-theme.ts` |
+| Component stubs to replace | `{outDir}/src/components/*.tsx` |
+
+### Auth
+
+- `get_variant` needs a valid session. Use `login` (opens a browser).
+- Cookies for **this** package only land in `~/.tailwind-plus-mcp`.
+- First run can seed cookies/catalog from legacy `~/.tailwind-mcp` if present.
+
+### Legal boundaries (agents must respect)
+
+| Surface | What the MCP does | What it does **not** do |
+|---------|-------------------|-------------------------|
+| UI Blocks | Fetch code with the user’s credentials | Bundle code in npm package |
+| Templates / Kits | Metadata, URLs, theme option discovery | Serve zip file contents |
+| Catalyst | Docs APIs, colors, setup, **project scaffold** | Redistribute `catalyst-ui-kit.zip` source |
+
+---
+
+## Install & run
+
+```bash
+git clone https://github.com/JamesFincher/two.git
+cd two
+bun install
+bun run build
+npm link   # exposes tailwind-plus-mcp on PATH
+```
+
+```bash
+tailwind-plus-mcp login
+tailwind-plus-mcp sync-catalog --metadata-only
+tailwind-plus-mcp status
+```
+
+### Cursor / Claude MCP config
 
 ```json
 {
   "mcpServers": {
-    "tailwind-plus": {
-      "command": "npx",
-      "args": ["mcp-for-tailwind"]
+    "tailwind-plus-unofficial": {
+      "command": "tailwind-plus-mcp",
+      "args": []
     }
   }
 }
 ```
 
-**Cursor** (`.cursor/mcp.json`):
+Dev (run from source):
 
 ```json
 {
   "mcpServers": {
-    "tailwind-plus": {
-      "command": "npx",
-      "args": ["mcp-for-tailwind"]
+    "tailwind-plus-unofficial": {
+      "command": "bun",
+      "args": ["run", "/absolute/path/to/two/src/index.ts"]
     }
   }
 }
 ```
 
-## MCP Tools
+---
 
-| Tool | Description |
-|------|-------------|
-| `list_categories` | List all Tailwind Plus UI categories |
-| `list_blocks` | List blocks in a category |
-| `list_variants` | List variants for a block |
-| `get_variant` | Fetch component code (React, Vue, or HTML) |
-| `search` | Search across all components |
-| `suggest` | Get context-aware component suggestions |
-| `check_status` | Check auth, catalog, and cache status |
-| `login` | Launch browser for Tailwind Plus authentication |
+## MCP tools
 
-### Authentication
+### UI Blocks
+| Tool | Auth | Purpose |
+|------|------|---------|
+| `list_categories` | No | marketing / application-ui / ecommerce |
+| `list_blocks` | No | Blocks in a category |
+| `list_variants` | No | Variants for a block |
+| `get_variant` | Yes | React / Vue / HTML source (`version`: v4\|v3.4, `theme`: light\|dark\|system) |
+| `search` | No | Blocks + products |
+| `suggest` | No | Context-aware block suggestions |
 
-The `get_variant` tool requires authentication. If you haven't logged in, the AI can use the `check_status` tool to diagnose the issue and the `login` tool to launch a browser for authentication.
+### Templates & kits
+| Tool | Purpose |
+|------|---------|
+| `list_products` | All Tailwind Plus surfaces overview |
+| `list_templates` | Site templates (Spotlight, Radiant, …) |
+| `list_kits` | Kits (Oatmeal) |
+| `get_template` | One template/kit by slug |
 
-```
-AI: Let me check your Tailwind Plus status...
-    → check_status returns: "not_logged_in"
-AI: You need to log in. I'll open a browser for you...
-    → login opens browser, waits for you to authenticate
-AI: Great, you're logged in! Now I can fetch that hero component...
-```
+### Catalyst UI Kit
+| Tool | Purpose |
+|------|---------|
+| `get_catalyst_setup` | Full Getting Started checklist from docs |
+| `list_catalyst` | All 26 components (incl. Select) |
+| `get_catalyst_component` | Props, exports, colors, examples |
+| `list_catalyst_customizations` | Full customization inventory |
+| `list_catalyst_colors` | Control + badge color systems |
+| `generate_ui_kit` | Scaffold project (`outDir`, router, brandColor, …) |
 
-## CLI Commands
+### Auth / health
+| Tool | Purpose |
+|------|---------|
+| `check_status` | Auth, catalog, cache, **workflows + nextSteps** |
+| `login` | Browser login |
+
+---
+
+## CLI
 
 ```bash
-mcp-for-tailwind                    # Start MCP server (stdio)
-mcp-for-tailwind --remote [port]    # Start MCP server (HTTP)
-
-mcp-for-tailwind login              # Browser login
-mcp-for-tailwind status             # Show auth/catalog/cache status
-mcp-for-tailwind sync-catalog       # Sync component metadata
-mcp-for-tailwind clear-cache        # Clear cached components
-
-mcp-for-tailwind list-categories    # List categories
-mcp-for-tailwind list-blocks        # List blocks in a category
-mcp-for-tailwind search <query>     # Search components
+tailwind-plus-mcp status
+tailwind-plus-mcp list-products
+tailwind-plus-mcp list-catalyst
+tailwind-plus-mcp catalyst-setup
+tailwind-plus-mcp catalyst-component button
+tailwind-plus-mcp generate-ui-kit --out=./my-kit --router=next --brand=cyan
+tailwind-plus-mcp get-variant --category=marketing --block=heroes --variant=simple-centered --theme=system --version=v4
+tailwind-plus-mcp sync-catalog --metadata-only
 ```
 
-## Requirements
+---
 
-- Node.js 18+ or Bun
-- Valid [Tailwind Plus](https://tailwindcss.com/plus) license
-- Chrome, Chromium, Edge, or Brave (auto-detected, or downloaded on first use)
+## Coverage (verified against live Tailwind Plus)
 
-## Data Storage
+- **UI Blocks:** 93 categories / 657 variants (marketing + application-ui + ecommerce)
+- **Templates:** 12 site templates + **Oatmeal** kit
+- **Catalyst:** 26 components, setup, colors, scaffold generator
+- **Code fetch:** light/dark/system, react/vue/html, v4 → v4.3 picker
 
-All data lives in `~/.tailwind-mcp/`:
+See [docs/AI_TOOL_GUIDE.md](./docs/AI_TOOL_GUIDE.md) for agent-oriented workflows.
 
-- `cookies.json` — Session cookies
-- `catalog.json` — Component catalog metadata
-- `cache/` — Cached component code (7-day TTL)
+---
 
-## Legal Stuff
+## Development
 
-### What This Tool Does
+```bash
+bun install
+bun run dev
+bun run build
+bunx tsc --noEmit
+```
 
-This tool provides a framework that allows **existing Tailwind Plus license holders** to:
-
-1. Authenticate using their own valid Tailwind Plus credentials
-2. Retrieve components they are already licensed to access
-3. Serve those components locally in a format optimized for LLM consumption
-
-### What This Tool Does Not Do
-
-- **Does not contain, bundle, or redistribute** any Tailwind Plus components
-- **Does not share access** — each user must authenticate with their own valid license
-- **Does not bypass licensing** — unlicensed users cannot access content through this tool
-
-### License Compliance
-
-This tool operates within the bounds of the Tailwind Plus license:
-
-1. **No Redistribution**: Components flow directly from Tailwind Labs to the licensed user
-2. **No Access Sharing**: Each user authenticates independently
-3. **No Derivative Works**: Original assets are served unmodified
-4. **No Competition**: Makes Tailwind Plus licenses more valuable, not less
-
-### Offer to Tailwind Labs Inc.
-
-We formally invite Tailwind Labs Inc. to adopt this codebase in whole or in part. The license explicitly grants Tailwind Labs Inc. unrestricted rights to use, modify, rebrand, and redistribute this software.
+Branch for the unofficial line: `feat/tailwind-plus-mcp-unofficial`.
 
 ## License
 
-**Tailwind Plus Tooling License v1.0**
-
-- **Tailwind Labs Inc.:** Unrestricted rights—use, modify, rebrand, ship, sublicense, anything.
-- **Everyone else:** Use-only with a valid Tailwind Plus license. No modifications, no redistribution.
-
-See [LICENSE](./LICENSE) for full terms.
+See [LICENSE](./LICENSE). Tailwind Labs is invited to adopt this codebase under the existing grant.

@@ -42,7 +42,12 @@ export function parseVariantCacheKey(key: string): {
   const parts = key.split("--");
   if (parts.length !== 6) return null;
 
-  const [category, blockSlug, variantSlug, format, theme, version] = parts;
+  const category = parts[0]!;
+  const blockSlug = parts[1]!;
+  const variantSlug = parts[2]!;
+  const format = parts[3]!;
+  const theme = parts[4]!;
+  const version = parts[5]!;
   return { category, blockSlug, variantSlug, format, theme, version };
 }
 
@@ -69,6 +74,9 @@ export function parseBlockKey(key: string): {
   const parts = key.split("/");
   if (parts.length !== 3) return null;
 
-  const [category, subcategory, slug] = parts;
-  return { category, subcategory, slug };
+  return {
+    category: parts[0]!,
+    subcategory: parts[1]!,
+    slug: parts[2]!,
+  };
 }

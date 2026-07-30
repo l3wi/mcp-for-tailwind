@@ -87,6 +87,10 @@ function levenshteinDistance(a: string, b: string): number {
 /**
  * Search across all blocks and variants.
  */
+/** Drop noisy fuzzy matches (e.g. "oatmeal" → random banners). */
+const MIN_BLOCK_RELEVANCE = 0.45;
+const MIN_VARIANT_RELEVANCE = 0.5;
+
 export function search(
   query: string,
   catalogManager: CatalogManager,
@@ -99,18 +103,27 @@ export function search(
   const { category, limit = 10, includeVariants = true } = options || {};
   const results: SearchResultItem[] = [];
   const blocks = catalogManager.getBlocks(category);
-  const queryLower = query.toLowerCase();
+  const queryLower = query.toLowerCase().trim();
+  if (!queryLower) return [];
 
   for (const block of blocks) {
-    // Score block name and description
-    const blockNameScore = calculateSimilarity(block.name, queryLower);
+    // Exact slug / name boosts
+    const slugHit =
+      block.slug === queryLower ||
+      block.slug.includes(queryLower) ||
+      queryLower.includes(block.slug)
+        ? 0.95
+        : 0;
+    const blockNameScore = Math.max(
+      calculateSimilarity(block.name, queryLower),
+      slugHit
+    );
     const blockDescScore = block.description
       ? calculateSimilarity(block.description, queryLower) * 0.8
       : 0;
     const blockScore = Math.max(blockNameScore, blockDescScore);
 
-    // Add block result if relevant
-    if (blockScore > 0.3) {
+    if (blockScore >= MIN_BLOCK_RELEVANCE) {
       results.push({
         type: "block" as SearchResultType,
         category: block.category,
@@ -121,17 +134,19 @@ export function search(
       });
     }
 
-    // Search variants
     if (includeVariants && block.variants) {
       for (const variant of block.variants) {
-        const variantScore = calculateSimilarity(variant.name, queryLower);
+        const variantSlugHit =
+          variant.slug === queryLower || variant.slug.includes(queryLower) ? 0.92 : 0;
+        const variantScore = Math.max(
+          calculateSimilarity(variant.name, queryLower),
+          variantSlugHit
+        );
 
-        // Boost variant score if block is also relevant
-        const combinedScore = blockScore > 0.5
-          ? variantScore * 0.7 + blockScore * 0.3
-          : variantScore;
+        const combinedScore =
+          blockScore >= 0.5 ? variantScore * 0.7 + blockScore * 0.3 : variantScore;
 
-        if (combinedScore > 0.3) {
+        if (combinedScore >= MIN_VARIANT_RELEVANCE) {
           results.push({
             type: "variant" as SearchResultType,
             category: block.category,
@@ -146,32 +161,71 @@ export function search(
     }
   }
 
-  // Sort by relevance and limit
-  return results
-    .sort((a, b) => b.relevance - a.relevance)
-    .slice(0, limit);
+  return results.sort((a, b) => b.relevance - a.relevance).slice(0, limit);
 }
 
 /**
  * Context keywords for suggestion matching.
+ * Block slugs must match catalog-v3 keys (e.g. heroes, feature-sections, sidebar).
  */
 const CONTEXT_KEYWORDS: Record<string, { context: Context; blocks: string[] }> = {
-  "landing page": { context: "marketing", blocks: ["heroes", "cta-sections", "features", "pricing", "testimonials", "footers"] },
-  "saas": { context: "marketing", blocks: ["heroes", "pricing", "features", "testimonials", "cta-sections"] },
-  "portfolio": { context: "marketing", blocks: ["heroes", "portfolios", "contact-sections", "footers"] },
-  "dashboard": { context: "application-ui", blocks: ["sidebars", "stacked-layouts", "stats", "tables", "lists"] },
-  "admin": { context: "application-ui", blocks: ["sidebars", "tables", "forms", "stats", "overlays"] },
-  "settings": { context: "application-ui", blocks: ["form-layouts", "headings", "vertical-navigation", "description-lists"] },
-  "store": { context: "ecommerce", blocks: ["product-overviews", "product-lists", "shopping-carts", "category-filters"] },
-  "checkout": { context: "ecommerce", blocks: ["checkout-forms", "order-summaries", "shopping-carts"] },
-  "product": { context: "ecommerce", blocks: ["product-overviews", "product-quickviews", "product-features", "reviews"] },
-  "blog": { context: "marketing", blocks: ["blog-sections", "headers", "footers"] },
-  "auth": { context: "application-ui", blocks: ["sign-in-and-registration", "forms"] },
-  "login": { context: "application-ui", blocks: ["sign-in-and-registration"] },
-  "modal": { context: "application-ui", blocks: ["modal-dialogs", "overlays", "notifications"] },
-  "form": { context: "application-ui", blocks: ["form-layouts", "forms", "input-groups", "select-menus"] },
-  "table": { context: "application-ui", blocks: ["tables", "lists", "grid-lists"] },
-  "navigation": { context: "application-ui", blocks: ["navbars", "sidebars", "vertical-navigation", "tabs"] },
+  "landing page": {
+    context: "marketing",
+    blocks: ["heroes", "cta-sections", "feature-sections", "pricing", "testimonials", "footers", "headers"],
+  },
+  saas: {
+    context: "marketing",
+    blocks: ["heroes", "pricing", "feature-sections", "testimonials", "cta-sections", "logo-clouds"],
+  },
+  marketing: {
+    context: "marketing",
+    blocks: ["heroes", "feature-sections", "cta-sections", "pricing", "newsletter-sections", "footers"],
+  },
+  portfolio: {
+    context: "marketing",
+    blocks: ["heroes", "content-sections", "team-sections", "contact-sections", "footers"],
+  },
+  dashboard: {
+    context: "application-ui",
+    blocks: ["sidebar", "stacked", "stats", "tables", "stacked-lists", "navbars"],
+  },
+  admin: {
+    context: "application-ui",
+    blocks: ["sidebar", "tables", "form-layouts", "stats", "modal-dialogs", "command-palettes"],
+  },
+  settings: {
+    context: "application-ui",
+    blocks: ["form-layouts", "page-headings", "vertical-navigation", "description-lists", "settings-screens"],
+  },
+  store: {
+    context: "ecommerce",
+    blocks: ["product-overviews", "product-lists", "shopping-carts", "category-filters", "store-navigation"],
+  },
+  checkout: {
+    context: "ecommerce",
+    blocks: ["checkout-forms", "order-summaries", "shopping-carts", "checkout-pages"],
+  },
+  product: {
+    context: "ecommerce",
+    blocks: ["product-overviews", "product-quickviews", "product-features", "reviews", "product-pages"],
+  },
+  blog: { context: "marketing", blocks: ["blog-sections", "headers", "footers", "content-sections"] },
+  auth: { context: "application-ui", blocks: ["sign-in-forms"] },
+  login: { context: "application-ui", blocks: ["sign-in-forms"] },
+  modal: { context: "application-ui", blocks: ["modal-dialogs", "drawers", "notifications"] },
+  form: {
+    context: "application-ui",
+    blocks: ["form-layouts", "input-groups", "select-menus", "checkboxes", "radio-groups"],
+  },
+  table: { context: "application-ui", blocks: ["tables", "stacked-lists", "grid-lists"] },
+  navigation: {
+    context: "application-ui",
+    blocks: ["navbars", "sidebar-navigation", "vertical-navigation", "tabs", "breadcrumbs"],
+  },
+  ecommerce: {
+    context: "ecommerce",
+    blocks: ["product-lists", "product-overviews", "shopping-carts", "promo-sections"],
+  },
 };
 
 /**
@@ -264,16 +318,17 @@ function getSuggestionReason(block: Block, building: string): string {
     "cta-sections": "Drive conversions with a call-to-action",
     pricing: "Display your pricing plans clearly",
     testimonials: "Add social proof to build trust",
-    features: "Showcase your product features",
+    "feature-sections": "Showcase your product features",
     footers: "Professional footer with links and info",
-    sidebars: "Navigation sidebar for your dashboard",
+    sidebar: "Sidebar application shell for dashboards",
+    stacked: "Stacked application shell layout",
     tables: "Display data in organized tables",
-    forms: "Collect user input with styled forms",
+    "form-layouts": "Collect user input with form layouts",
     "shopping-carts": "Shopping cart for your store",
     "product-overviews": "Showcase your products",
     "checkout-forms": "Streamline the checkout process",
-    "sign-in-and-registration": "User authentication forms",
-    "modal-dialogs": "Overlay dialogs for actions and confirmations",
+    "sign-in-forms": "Sign-in and registration screens",
+    "modal-dialogs": "Modal dialogs for confirmations and flows",
     navbars: "Top navigation for your site",
     stats: "Display key metrics and statistics",
   };

@@ -1,8 +1,8 @@
 /**
- * Variant-level fetcher for Tailwind Plus components.
- * Handles fetching individual component variants with format/version/theme selection.
+ * Variant-level fetcher for Tailwind Plus UI blocks.
+ * Handles format / version / theme selection with resilient DOM controls.
  */
-import type { Browser, Page } from "puppeteer";
+import type { Browser, Page } from "puppeteer-core";
 import type {
   Block,
   ComponentVariant,
@@ -12,11 +12,27 @@ import type {
   Theme,
   TailwindVersion,
 } from "../types/index.ts";
-import { UI_BLOCKS_URL, RATE_LIMIT, RETRY_CONFIG, TIMEOUTS, TIMING, getRandomUserAgent } from "../config.ts";
+import {
+  UI_BLOCKS_URL,
+  RATE_LIMIT,
+  RETRY_CONFIG,
+  TIMEOUTS,
+  DEFAULT_TAILWIND_VERSION,
+  DEFAULT_THEME,
+  getRandomUserAgent,
+} from "../config.ts";
 import { RateLimiter } from "../utils/rate-limiter.ts";
 import { withRetry } from "../utils/retry.ts";
 import { toKebabCase } from "../utils/slug.ts";
 import { parseDependencies } from "./shared.ts";
+import {
+  clickCodeTab,
+  extractVisibleCode,
+  notesForCode,
+  selectFormat,
+  selectTheme,
+  selectVersion,
+} from "./page-controls.ts";
 import {
   AuthRequiredError,
   VariantIndexOutOfRangeError,
@@ -35,7 +51,6 @@ export class VariantFetcher {
 
   /**
    * Fetch all variants from a block page (metadata only).
-   * Returns variant names, slugs, and component IDs.
    */
   async fetchBlockVariants(
     category: Context,
@@ -54,9 +69,7 @@ export class VariantFetcher {
           await page.setViewport({ width: 1920, height: 1080 });
 
           const hasCookies = await this.setupPage(page);
-          if (!hasCookies) {
-            throw new AuthRequiredError();
-          }
+          if (!hasCookies) throw new AuthRequiredError();
 
           const url = `${UI_BLOCKS_URL}/${category}/${subcategory}/${blockSlug}`;
           console.log(`Fetching variants from: ${url}`);
@@ -66,24 +79,16 @@ export class VariantFetcher {
             timeout: TIMEOUTS.navigation,
           });
 
-          if (page.url().includes("/login")) {
-            throw new AuthRequiredError();
-          }
+          if (page.url().includes("/login")) throw new AuthRequiredError();
 
-          // Wait for page to load
           await page.waitForSelector("h1", { timeout: TIMEOUTS.selector });
 
-          // Fetch block info and variants
           const result = await page.evaluate(() => {
-            // Get block name and description
             const h1 = document.querySelector("h1");
             const blockName = h1?.textContent?.trim() || "";
-
-            // Description is typically in a paragraph after h1
             const description =
               document.querySelector("h1 + p")?.textContent?.trim() || "";
 
-            // Find all variant headings with component anchors
             const variants: Array<{
               index: number;
               name: string;
@@ -91,15 +96,14 @@ export class VariantFetcher {
             }> = [];
 
             const headings = document.querySelectorAll("h2");
-            headings.forEach((h2, index) => {
+            headings.forEach((h2) => {
               const link = h2.querySelector('a[href*="#component-"]');
               if (link) {
                 const href = link.getAttribute("href") || "";
                 const componentId = href.replace("#", "");
-                const name = h2.textContent?.trim() || `Variant ${index}`;
-
+                const name = h2.textContent?.trim() || `Variant ${variants.length}`;
                 variants.push({
-                  index,
+                  index: variants.length,
                   name,
                   componentId,
                 });
@@ -109,7 +113,6 @@ export class VariantFetcher {
             return { blockName, description, variants };
           });
 
-          // Convert to ComponentVariant with slugs
           const variants: ComponentVariant[] = result.variants.map((v) => ({
             index: v.index,
             name: v.name,
@@ -152,8 +155,8 @@ export class VariantFetcher {
     blockSlug: string,
     variantIndex: number,
     format: CodeFormat = "react",
-    version: TailwindVersion = "v4.1",
-    theme: Theme = "light"
+    version: TailwindVersion = DEFAULT_TAILWIND_VERSION,
+    theme: Theme = DEFAULT_THEME
   ): Promise<VariantCode> {
     await this.rateLimiter.acquire();
 
@@ -167,9 +170,7 @@ export class VariantFetcher {
           await page.setViewport({ width: 1920, height: 1080 });
 
           const hasCookies = await this.setupPage(page);
-          if (!hasCookies) {
-            throw new AuthRequiredError();
-          }
+          if (!hasCookies) throw new AuthRequiredError();
 
           const url = `${UI_BLOCKS_URL}/${category}/${subcategory}/${blockSlug}`;
           console.log(
@@ -181,18 +182,16 @@ export class VariantFetcher {
             timeout: TIMEOUTS.navigation,
           });
 
-          if (page.url().includes("/login")) {
-            throw new AuthRequiredError();
-          }
+          if (page.url().includes("/login")) throw new AuthRequiredError();
 
-          // Wait for components to load
-          await page.waitForSelector('[role="tabpanel"]', {
-            timeout: TIMEOUTS.selector,
-          });
+          await page
+            .waitForSelector('[role="tabpanel"], h2 a[href*="#component-"]', {
+              timeout: TIMEOUTS.selector,
+            })
+            .catch(() => {});
 
-          // Get variant info
           const variantInfo = await page.evaluate((targetIndex) => {
-            const headings = document.querySelectorAll("h2");
+            const headings = Array.from(document.querySelectorAll("h2"));
             let variantCount = 0;
             let variantName = "";
             let componentId = "";
@@ -209,130 +208,39 @@ export class VariantFetcher {
               }
             }
 
-            return { variantName, componentId, totalVariants: variantCount + 1 };
+            return { variantName, componentId };
           }, variantIndex);
+
+          // Recount properly
+          const total = await page.evaluate(() => {
+            let n = 0;
+            document.querySelectorAll("h2").forEach((h2) => {
+              if (h2.querySelector('a[href*="#component-"]')) n++;
+            });
+            return n;
+          });
 
           if (!variantInfo.variantName) {
-            throw new VariantIndexOutOfRangeError(variantIndex, variantInfo.totalVariants);
+            throw new VariantIndexOutOfRangeError(variantIndex, total);
           }
 
-          // Click on the variant's Code tab
-          const codeTabs = await page.$$('[role="tab"]');
-          let codeTabCount = 0;
-
-          for (const tab of codeTabs) {
-            const text = await tab.evaluate((el) => el.textContent);
-            if (text === "Code") {
-              if (codeTabCount === variantIndex) {
-                await tab.click();
-                break;
-              }
-              codeTabCount++;
-            }
-          }
-
-          // Wait for code panel to appear
-          await page
-            .waitForSelector("code", { timeout: 5000 })
-            .catch(() => {});
-
-          // Select format
-          const formatMap: Record<CodeFormat, string> = {
-            react: "React",
-            vue: "Vue",
-            html: "HTML",
-          };
-
-          // Find format selector for this variant
-          const formatSelectors = await page.$$("select");
-          if (formatSelectors.length > variantIndex) {
-            const formatSelect = formatSelectors[variantIndex];
-            if (formatSelect) {
-              await formatSelect.select(formatMap[format]);
-            }
-          } else if (formatSelectors.length > 0) {
-            // Global format selector
-            await formatSelectors[0]!.select(formatMap[format]);
-          }
-
-          // Wait for format change to apply
-          await new Promise((r) => setTimeout(r, TIMING.formatChangeDelayMs));
-
-          // Select version (appears after Code tab is clicked)
-          const versionSelectors = await page.$$("select");
-          for (const select of versionSelectors) {
-            const options = await select.$$eval("option", (opts) =>
-              opts.map((o) => o.textContent?.trim())
-            );
-            if (options.includes("v4.1") || options.includes("v3.4")) {
-              await select.select(version);
-              break;
-            }
-          }
-
-          // Wait for version change
-          await new Promise((r) => setTimeout(r, TIMING.versionChangeDelayMs));
-
-          // Select theme if dark
-          if (theme === "dark") {
-            const darkRadio = await page.$(
-              'input[type="radio"][value="dark"], [aria-label*="Dark"]'
-            );
-            if (darkRadio) {
-              await darkRadio.click();
-              await new Promise((r) => setTimeout(r, TIMING.versionChangeDelayMs));
-            }
-          }
-
-          // Fetch the code
-          const code = await page.evaluate((targetVariantIndex) => {
-            // Find all code elements
-            const codeElements = document.querySelectorAll("code");
-
-            // Try to find code in tabpanels first
-            const tabPanels = document.querySelectorAll('[role="tabpanel"]');
-            let codeTabCount = 0;
-
-            for (const panel of tabPanels) {
-              const tabName = panel.getAttribute("aria-label");
-              if (tabName === "Code") {
-                if (codeTabCount === targetVariantIndex) {
-                  const codeEl = panel.querySelector("code");
-                  if (codeEl?.textContent) {
-                    return codeEl.textContent;
-                  }
-                }
-                codeTabCount++;
-              }
-            }
-
-            // Fallback: find visible code element
-            for (const el of codeElements) {
-              const text = el.textContent || "";
-              // Look for code with imports or HTML structure
-              if (
-                text.includes("import") ||
-                text.includes("export") ||
-                text.includes("<template>") ||
-                text.includes("<section") ||
-                text.includes("<div")
-              ) {
-                // Check if element is visible
-                const rect = el.getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                  return text;
-                }
-              }
-            }
-
-            return null;
-          }, variantIndex);
-
-          if (!code) {
+          const clicked = await clickCodeTab(page, variantIndex);
+          if (!clicked) {
             throw new CodeFetchError(variantIndex);
           }
 
-          const variantCode: VariantCode = {
+          await page.waitForSelector("code", { timeout: 5000 }).catch(() => {});
+
+          await selectFormat(page, format);
+          const versionResult = await selectVersion(page, version);
+          await selectTheme(page, theme);
+
+          const code = await extractVisibleCode(page, variantIndex);
+          if (!code) throw new CodeFetchError(variantIndex);
+
+          const notes = notesForCode(code, format);
+
+          return {
             category,
             blockSlug,
             variantSlug: toKebabCase(variantInfo.variantName),
@@ -340,13 +248,13 @@ export class VariantFetcher {
             componentId: variantInfo.componentId,
             format,
             version,
+            resolvedVersion: versionResult.resolved ?? undefined,
             theme,
             code,
             dependencies: parseDependencies(code),
+            notes: notes.length ? notes : undefined,
             cachedAt: Date.now(),
           };
-
-          return variantCode;
         } finally {
           await page.close();
         }
@@ -363,25 +271,18 @@ export class VariantFetcher {
   }
 
   /**
-   * Fetch all variants for a block with all formats.
-   * Used for prefetching.
+   * Prefetch all formats/versions for variants on a block (multi page-load path).
    */
   async fetchAllVariantCodes(
     category: Context,
     subcategory: string,
     blockSlug: string,
     formats: CodeFormat[] = ["react", "vue", "html"],
-    versions: TailwindVersion[] = ["v4.1", "v3.4"],
-    theme: Theme = "light",
+    versions: TailwindVersion[] = [DEFAULT_TAILWIND_VERSION, "v3.4"],
+    theme: Theme = DEFAULT_THEME,
     onProgress?: (current: number, total: number, variant: string) => void
   ): Promise<VariantCode[]> {
-    // First, get variant metadata
-    const { variants } = await this.fetchBlockVariants(
-      category,
-      subcategory,
-      blockSlug
-    );
-
+    const { variants } = await this.fetchBlockVariants(category, subcategory, blockSlug);
     const results: VariantCode[] = [];
     const total = variants.length * formats.length * versions.length;
     let current = 0;
@@ -391,7 +292,6 @@ export class VariantFetcher {
         for (const version of versions) {
           current++;
           onProgress?.(current, total, `${variant.name} (${format}, ${version})`);
-
           try {
             const code = await this.fetchVariantCode(
               category,
@@ -407,10 +307,7 @@ export class VariantFetcher {
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             console.error(`  ✗ ${variant.name} (${format}, ${version}): ${message}`);
-
-            if (error instanceof AuthRequiredError) {
-              throw error;
-            }
+            if (error instanceof AuthRequiredError) throw error;
           }
         }
       }
@@ -420,8 +317,7 @@ export class VariantFetcher {
   }
 
   /**
-   * Fetch all code for a block in a SINGLE page session.
-   * Much more efficient - loads page once, fetches all formats/versions.
+   * Efficient single-page-session fetch of all formats/versions for known variants.
    */
   async fetchBlockCodeEfficient(
     category: Context,
@@ -429,13 +325,11 @@ export class VariantFetcher {
     blockSlug: string,
     variants: ComponentVariant[],
     formats: CodeFormat[] = ["react", "vue", "html"],
-    versions: TailwindVersion[] = ["v4.1", "v3.4"],
-    theme: Theme = "light",
+    versions: TailwindVersion[] = [DEFAULT_TAILWIND_VERSION, "v3.4"],
+    theme: Theme = DEFAULT_THEME,
     onProgress?: (variant: string, format: CodeFormat, version: TailwindVersion) => void
   ): Promise<VariantCode[]> {
-    if (variants.length === 0) {
-      return [];
-    }
+    if (variants.length === 0) return [];
 
     await this.rateLimiter.acquire();
 
@@ -448,9 +342,7 @@ export class VariantFetcher {
       await page.setViewport({ width: 1920, height: 1080 });
 
       const hasCookies = await this.setupPage(page);
-      if (!hasCookies) {
-        throw new AuthRequiredError();
-      }
+      if (!hasCookies) throw new AuthRequiredError();
 
       const url = `${UI_BLOCKS_URL}/${category}/${subcategory}/${blockSlug}`;
       console.log(`Loading page: ${url}`);
@@ -460,139 +352,33 @@ export class VariantFetcher {
         timeout: TIMEOUTS.navigation,
       });
 
-      if (page.url().includes("/login")) {
-        throw new AuthRequiredError();
-      }
+      if (page.url().includes("/login")) throw new AuthRequiredError();
 
-      // Wait for components to load
-      await page.waitForSelector('[role="tabpanel"]', {
-        timeout: TIMEOUTS.selector,
-      });
+      await page
+        .waitForSelector('[role="tabpanel"], h2 a[href*="#component-"]', {
+          timeout: TIMEOUTS.selector,
+        })
+        .catch(() => {});
 
-      const formatMap: Record<CodeFormat, string> = {
-        react: "React",
-        vue: "Vue",
-        html: "HTML",
-      };
-
-      // Process each variant
       for (const variant of variants) {
-        // Click on this variant's Code tab
-        const codeTabs = await page.$$('[role="tab"]');
-        let codeTabCount = 0;
-        let clickedTab = false;
-
-        for (const tab of codeTabs) {
-          const text = await tab.evaluate((el) => el.textContent);
-          if (text === "Code") {
-            if (codeTabCount === variant.index) {
-              await tab.click();
-              clickedTab = true;
-              break;
-            }
-            codeTabCount++;
-          }
-        }
-
-        if (!clickedTab) {
+        const clicked = await clickCodeTab(page, variant.index);
+        if (!clicked) {
           console.warn(`  Could not find Code tab for variant ${variant.index}`);
           continue;
         }
 
-        // Wait for code to appear
         await page.waitForSelector("code", { timeout: 5000 }).catch(() => {});
-        await new Promise((r) => setTimeout(r, TIMING.versionChangeDelayMs));
 
-        // Loop through formats and versions
         for (const format of formats) {
-          // Select format
-          const formatSelectors = await page.$$("select");
-          let formatSelected = false;
-
-          for (const select of formatSelectors) {
-            const options = await select.$$eval("option", (opts) =>
-              opts.map((o) => o.textContent?.trim())
-            );
-            if (options.includes("React") || options.includes("Vue") || options.includes("HTML")) {
-              try {
-                await select.select(formatMap[format]);
-                formatSelected = true;
-                break;
-              } catch {
-                // Selector might be stale
-              }
-            }
-          }
-
-          if (!formatSelected) {
-            console.warn(`  Could not select format ${format} for ${variant.name}`);
-          }
-
-          await new Promise((r) => setTimeout(r, TIMING.uiInteractionDelayMs));
+          await selectFormat(page, format);
 
           for (const version of versions) {
             onProgress?.(variant.name, format, version);
 
-            // Select version
-            const versionSelectors = await page.$$("select");
-            for (const select of versionSelectors) {
-              const options = await select.$$eval("option", (opts) =>
-                opts.map((o) => o.textContent?.trim())
-              );
-              if (options.includes("v4.1") || options.includes("v3.4")) {
-                try {
-                  await select.select(version);
-                } catch {
-                  // Selector might be stale
-                }
-                break;
-              }
-            }
+            const versionResult = await selectVersion(page, version);
+            await selectTheme(page, theme);
 
-            await new Promise((r) => setTimeout(r, TIMING.uiInteractionDelayMs));
-
-            // Fetch code
-            const code = await page.evaluate((targetVariantIndex) => {
-              // Find all code elements
-              const codeElements = document.querySelectorAll("code");
-
-              // Try to find code in tabpanels first
-              const tabPanels = document.querySelectorAll('[role="tabpanel"]');
-              let codeTabCount = 0;
-
-              for (const panel of tabPanels) {
-                const tabName = panel.getAttribute("aria-label");
-                if (tabName === "Code") {
-                  if (codeTabCount === targetVariantIndex) {
-                    const codeEl = panel.querySelector("code");
-                    if (codeEl?.textContent) {
-                      return codeEl.textContent;
-                    }
-                  }
-                  codeTabCount++;
-                }
-              }
-
-              // Fallback: find visible code element
-              for (const el of codeElements) {
-                const text = el.textContent || "";
-                if (
-                  text.includes("import") ||
-                  text.includes("export") ||
-                  text.includes("<template>") ||
-                  text.includes("<section") ||
-                  text.includes("<div")
-                ) {
-                  const rect = el.getBoundingClientRect();
-                  if (rect.width > 0 && rect.height > 0) {
-                    return text;
-                  }
-                }
-              }
-
-              return null;
-            }, variant.index);
-
+            const code = await extractVisibleCode(page, variant.index);
             if (code) {
               results.push({
                 category,
@@ -602,9 +388,11 @@ export class VariantFetcher {
                 componentId: variant.componentId,
                 format,
                 version,
+                resolvedVersion: versionResult.resolved ?? undefined,
                 theme,
                 code,
                 dependencies: parseDependencies(code),
+                notes: notesForCode(code, format),
                 cachedAt: Date.now(),
               });
             }
@@ -619,17 +407,15 @@ export class VariantFetcher {
   }
 
   /**
-   * Fetch a block completely in ONE page load.
-   * Fetches variant metadata AND all code for all formats/versions.
-   * This is the most efficient method - use this for sync-catalog.
+   * One page load: metadata + optional code for all formats/versions.
    */
   async fetchBlockComplete(
     category: Context,
     subcategory: string,
     blockSlug: string,
     formats: CodeFormat[] = ["react", "vue", "html"],
-    versions: TailwindVersion[] = ["v4.1", "v3.4"],
-    theme: Theme = "light",
+    versions: TailwindVersion[] = [DEFAULT_TAILWIND_VERSION, "v3.4"],
+    theme: Theme = DEFAULT_THEME,
     onProgress?: (variant: string, format: CodeFormat, version: TailwindVersion) => void
   ): Promise<{ block: Block; codes: VariantCode[] }> {
     await this.rateLimiter.acquire();
@@ -643,9 +429,7 @@ export class VariantFetcher {
       await page.setViewport({ width: 1920, height: 1080 });
 
       const hasCookies = await this.setupPage(page);
-      if (!hasCookies) {
-        throw new AuthRequiredError();
-      }
+      if (!hasCookies) throw new AuthRequiredError();
 
       const url = `${UI_BLOCKS_URL}/${category}/${subcategory}/${blockSlug}`;
       console.log(`  Loading: ${url}`);
@@ -655,48 +439,37 @@ export class VariantFetcher {
         timeout: TIMEOUTS.navigation,
       });
 
-      if (page.url().includes("/login")) {
-        throw new AuthRequiredError();
-      }
+      if (page.url().includes("/login")) throw new AuthRequiredError();
 
-      // Wait for page to load
       await page.waitForSelector("h1", { timeout: TIMEOUTS.selector });
 
-      // Step 1: Fetch block metadata and variant info
       const pageData = await page.evaluate(() => {
         const h1 = document.querySelector("h1");
         const blockName = h1?.textContent?.trim() || "";
-        const description = document.querySelector("h1 + p")?.textContent?.trim() || "";
+        const description =
+          document.querySelector("h1 + p")?.textContent?.trim() || "";
 
-        // Find all variant headings with component anchors
         const variants: Array<{
           index: number;
           name: string;
           componentId: string;
         }> = [];
 
-        const headings = document.querySelectorAll("h2");
-        let variantIndex = 0;
-        headings.forEach((h2) => {
+        document.querySelectorAll("h2").forEach((h2) => {
           const link = h2.querySelector('a[href*="#component-"]');
           if (link) {
             const href = link.getAttribute("href") || "";
-            const componentId = href.replace("#", "");
-            const name = h2.textContent?.trim() || `Variant ${variantIndex}`;
-
             variants.push({
-              index: variantIndex,
-              name,
-              componentId,
+              index: variants.length,
+              name: h2.textContent?.trim() || `Variant ${variants.length}`,
+              componentId: href.replace("#", ""),
             });
-            variantIndex++;
           }
         });
 
         return { blockName, description, variants };
       });
 
-      // Build variants with slugs
       const variants: ComponentVariant[] = pageData.variants.map((v) => ({
         index: v.index,
         name: v.name,
@@ -706,123 +479,27 @@ export class VariantFetcher {
 
       console.log(`  Found ${variants.length} variants`);
 
-      // Step 2: If we need code, fetch it for all variants
       if (formats.length > 0 && versions.length > 0 && variants.length > 0) {
-        // Wait for tabpanels to load
-        await page.waitForSelector('[role="tabpanel"]', { timeout: TIMEOUTS.selector }).catch(() => {});
-
-        const formatMap: Record<CodeFormat, string> = {
-          react: "React",
-          vue: "Vue",
-          html: "HTML",
-        };
+        await page
+          .waitForSelector('[role="tabpanel"]', { timeout: TIMEOUTS.selector })
+          .catch(() => {});
 
         for (const variant of variants) {
-          // Click on this variant's Code tab
-          const codeTabs = await page.$$('[role="tab"]');
-          let codeTabCount = 0;
-          let clickedTab = false;
+          const clicked = await clickCodeTab(page, variant.index);
+          if (!clicked) continue;
 
-          for (const tab of codeTabs) {
-            const text = await tab.evaluate((el) => el.textContent);
-            if (text === "Code") {
-              if (codeTabCount === variant.index) {
-                await tab.click();
-                clickedTab = true;
-                break;
-              }
-              codeTabCount++;
-            }
-          }
-
-          if (!clickedTab) {
-            continue;
-          }
-
-          // Wait for code to appear
           await page.waitForSelector("code", { timeout: 5000 }).catch(() => {});
-          await new Promise((r) => setTimeout(r, TIMING.versionChangeDelayMs));
 
-          // Loop through formats and versions
           for (const format of formats) {
-            // Select format
-            const formatSelectors = await page.$$("select");
-            for (const select of formatSelectors) {
-              const options = await select.$$eval("option", (opts) =>
-                opts.map((o) => o.textContent?.trim())
-              );
-              if (options.includes("React") || options.includes("Vue") || options.includes("HTML")) {
-                try {
-                  await select.select(formatMap[format]);
-                } catch {
-                  // Selector might be stale
-                }
-                break;
-              }
-            }
-
-            await new Promise((r) => setTimeout(r, TIMING.uiInteractionDelayMs));
+            await selectFormat(page, format);
 
             for (const version of versions) {
               onProgress?.(variant.name, format, version);
 
-              // Select version
-              const versionSelectors = await page.$$("select");
-              for (const select of versionSelectors) {
-                const options = await select.$$eval("option", (opts) =>
-                  opts.map((o) => o.textContent?.trim())
-                );
-                if (options.includes("v4.1") || options.includes("v3.4")) {
-                  try {
-                    await select.select(version);
-                  } catch {
-                    // Selector might be stale
-                  }
-                  break;
-                }
-              }
+              const versionResult = await selectVersion(page, version);
+              await selectTheme(page, theme);
 
-              await new Promise((r) => setTimeout(r, TIMING.uiInteractionDelayMs));
-
-              // Fetch code
-              const code = await page.evaluate((targetVariantIndex) => {
-                const codeElements = document.querySelectorAll("code");
-                const tabPanels = document.querySelectorAll('[role="tabpanel"]');
-                let codeTabCount = 0;
-
-                for (const panel of tabPanels) {
-                  const tabName = panel.getAttribute("aria-label");
-                  if (tabName === "Code") {
-                    if (codeTabCount === targetVariantIndex) {
-                      const codeEl = panel.querySelector("code");
-                      if (codeEl?.textContent) {
-                        return codeEl.textContent;
-                      }
-                    }
-                    codeTabCount++;
-                  }
-                }
-
-                // Fallback: find visible code element
-                for (const el of codeElements) {
-                  const text = el.textContent || "";
-                  if (
-                    text.includes("import") ||
-                    text.includes("export") ||
-                    text.includes("<template>") ||
-                    text.includes("<section") ||
-                    text.includes("<div")
-                  ) {
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                      return text;
-                    }
-                  }
-                }
-
-                return null;
-              }, variant.index);
-
+              const code = await extractVisibleCode(page, variant.index);
               if (code) {
                 codes.push({
                   category,
@@ -832,9 +509,11 @@ export class VariantFetcher {
                   componentId: variant.componentId,
                   format,
                   version,
+                  resolvedVersion: versionResult.resolved ?? undefined,
                   theme,
                   code,
                   dependencies: parseDependencies(code),
+                  notes: notesForCode(code, format),
                   cachedAt: Date.now(),
                 });
               }
@@ -843,7 +522,6 @@ export class VariantFetcher {
         }
       }
 
-      // Build the complete block
       const block: Block = {
         name: pageData.blockName,
         slug: blockSlug,

@@ -12,7 +12,22 @@ import { VariantFetcher } from "./browser/variant-fetcher.ts";
 import { CacheManager } from "./cache/cache-manager.ts";
 import { CatalogManager } from "./data/catalog-manager.ts";
 import { search } from "./data/search.ts";
-import { TIMING } from "./config.ts";
+import {
+  listKits,
+  listTemplatesOnly,
+  productOverview,
+  CATALYST_COMPONENTS,
+  TEMPLATES,
+} from "./data/products.ts";
+import {
+  getCatalystComponent,
+  getCatalystSetupGuide,
+  listCatalystCustomizations,
+  CATALYST_COMPONENTS as CATALYST_FULL,
+} from "./data/catalyst.ts";
+import { generateCatalystUiKit } from "./generate/ui-kit.ts";
+import { BRAND } from "./brand.ts";
+import { TIMING, PACKAGE_VERSION, CONFIG_DIR } from "./config.ts";
 import type { Context, CodeFormat, Theme, TailwindVersion, Block } from "./types/index.ts";
 
 const args = process.argv.slice(2);
@@ -20,23 +35,31 @@ const command = args[0];
 
 function printHelp() {
   console.log(`
-mcp-for-tailwind v0.2.0 - MCP Server for Tailwind Plus
+${BRAND.displayName} v${PACKAGE_VERSION}
 
 USAGE:
-  mcp-for-tailwind                    Start MCP server (stdio transport)
-  mcp-for-tailwind --remote [port]    Start MCP server (HTTP transport, default: 3000)
+  tailwind-plus-mcp                    Start MCP server (stdio transport)
+  tailwind-plus-mcp --remote [port]    Start MCP server (HTTP transport, default: 3000)
 
 COMMANDS:
   login                           Interactive login to Tailwind Plus
-  status                          Show auth, catalog, and cache status
+  status                          Show auth, catalog, products, and cache status
 
-  list-categories                 List all top-level categories
+  list-categories                 List UI-block categories
   list-blocks [opts]              List blocks in a category
   list-variants [opts]            List variants for a block
   get-variant [opts]              Get code for a specific variant
-  search <query> [opts]           Search across blocks and variants
+  search <query> [opts]           Search blocks, variants, templates, kits
 
-  sync-catalog [opts]             Sync catalog and fetch all component code
+  list-products                   Overview of UI blocks / templates / kits / Catalyst
+  list-templates                  List site templates
+  list-kits                       List kits (e.g. Oatmeal)
+  list-catalyst                   List Catalyst UI kit components
+  catalyst-setup                  Full Catalyst getting-started + customizations
+  catalyst-component <slug>       Full component API (props, colors, exports)
+  generate-ui-kit --out=<dir>     Scaffold custom Catalyst UI kit project
+
+  sync-catalog [opts]             Sync UI-block catalog (and optionally code)
   clear-cache [opts]              Clear cached components
 
 OPTIONS:
@@ -45,22 +68,28 @@ OPTIONS:
   --block=<slug>                  Block slug (e.g., testimonials, heroes)
   --variant=<slug>                Variant slug (e.g., simple-centered)
   --format=<fmt>                  Code format: react, vue, html (default: react)
-  --version=<ver>                 Tailwind version: v4.1, v3.4 (default: v4.1)
-  --theme=<theme>                 Theme: light, dark (default: light)
+  --version=<ver>                 Tailwind version: v4 (latest), v3.4 (default: v4)
+  --theme=<theme>                 Theme: light, dark, system (default: light)
   --expired                       Only clear expired cache entries
   --force                         Force re-sync even if already synced
   --metadata-only                 Only sync metadata, skip code download (fast)
   --verbose                       Show detailed progress and debug info
+  --out=<dir>                     Output directory for generate-ui-kit
+  --name=<name>                   Project name for generate-ui-kit
+  --lang=typescript|javascript    Language for scaffold (default typescript)
+  --router=next|remix|inertia|plain  Link integration (default next)
+  --brand=<color>                 Brand Tailwind color for @theme (default indigo)
+
+DATA DIR: ${CONFIG_DIR}
+  (isolated from legacy mcp-for-tailwind at ~/.tailwind-mcp)
 
 EXAMPLES:
-  mcp-for-tailwind login
-  mcp-for-tailwind list-categories
-  mcp-for-tailwind list-blocks --category=marketing
-  mcp-for-tailwind list-variants --category=marketing --block=testimonials
-  mcp-for-tailwind get-variant --category=marketing --block=testimonials --variant=simple-centered
-  mcp-for-tailwind search "pricing table"
-  mcp-for-tailwind sync-catalog
-  mcp-for-tailwind sync-catalog --category=marketing --metadata-only
+  tailwind-plus-mcp login
+  tailwind-plus-mcp list-products
+  tailwind-plus-mcp list-templates
+  tailwind-plus-mcp list-blocks --category=marketing
+  tailwind-plus-mcp get-variant --category=marketing --block=heroes --variant=simple-centered --theme=system
+  tailwind-plus-mcp sync-catalog --metadata-only
 `);
 }
 
@@ -101,8 +130,11 @@ async function main() {
       const enhancedStats = catalogManager.getEnhancedStats();
       const cacheStats = cacheManager.getVariantStats();
       const lastUpdated = catalogManager.getEnhancedLastUpdated();
+      const products = productOverview();
 
-      console.log("\n=== Tailwind Plus MCP Status ===\n");
+      console.log(`\n=== ${BRAND.displayName} v${PACKAGE_VERSION} ===\n`);
+      console.log(`Data dir: ${CONFIG_DIR}`);
+      console.log("(Isolated from legacy mcp-for-tailwind ~/.tailwind-mcp)\n");
 
       console.log("Authentication:");
       if (authState.isAuthenticated) {
@@ -110,6 +142,7 @@ async function main() {
         if (authState.lastLoginAt) {
           console.log(`  Last login: ${new Date(authState.lastLoginAt).toLocaleString()}`);
         }
+        if (authState.source) console.log(`  Cookie source: ${authState.source}`);
       } else if (authState.cookiesExpired) {
         console.log("  Status: Cookies expired");
         console.log("  Action: Run 'login' to refresh");
@@ -118,7 +151,7 @@ async function main() {
         console.log("  Action: Run 'login' first");
       }
 
-      console.log("\nCatalog:");
+      console.log("\nUI Block Catalog:");
       if (enhancedStats) {
         const ageHours = lastUpdated ? Math.round((Date.now() - lastUpdated) / 3600000) : 0;
         console.log("  Status: Available (v3.0)");
@@ -128,7 +161,13 @@ async function main() {
         console.log(`  Needs refresh: ${catalogManager.enhancedNeedsRefresh() ? "Yes" : "No"}`);
       } else {
         console.log("  Status: Not synced");
-        console.log("  Action: Run 'sync-catalog' to build");
+        console.log("  Action: Run 'sync-catalog --metadata-only' to build");
+      }
+
+      console.log("\nProducts (static catalog):");
+      for (const s of products.surfaces) {
+        const count = "count" in s && s.count != null ? ` (${s.count})` : "";
+        console.log(`  - ${s.name}${count}`);
       }
 
       console.log("\nCache:");
@@ -139,6 +178,110 @@ async function main() {
       }
 
       console.log("");
+      process.exit(0);
+      break;
+    }
+
+    case "list-products": {
+      console.log(JSON.stringify(productOverview(), null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "list-templates": {
+      const includeKits = opts["include-kits"] === "true";
+      const items = includeKits ? TEMPLATES : listTemplatesOnly();
+      console.log(`\n=== Templates (${items.length}) ===\n`);
+      for (const t of items) {
+        console.log(`${t.name} (${t.slug}) [${t.kind}]`);
+        console.log(`  ${t.tagline}`);
+        console.log(`  ${t.url}`);
+        console.log("");
+      }
+      process.exit(0);
+      break;
+    }
+
+    case "list-kits": {
+      const kits = listKits();
+      console.log(`\n=== Kits (${kits.length}) ===\n`);
+      for (const t of kits) {
+        console.log(`${t.name} (${t.slug})`);
+        console.log(`  ${t.description.slice(0, 120)}...`);
+        console.log(`  ${t.url}`);
+        console.log(`  Stack: ${t.stack.join(", ")}`);
+        console.log("");
+      }
+      process.exit(0);
+      break;
+    }
+
+    case "list-catalyst": {
+      console.log(`\n=== Catalyst components (${CATALYST_FULL.length}) ===\n`);
+      const byGroup = new Map<string, typeof CATALYST_FULL>();
+      for (const c of CATALYST_FULL) {
+        const list = byGroup.get(c.group) || [];
+        list.push(c);
+        byGroup.set(c.group, list);
+      }
+      for (const [group, comps] of byGroup) {
+        console.log(`${group}:`);
+        for (const c of comps) {
+          const colors = c.colors ? ` [${c.colors.length} colors]` : "";
+          console.log(`  - ${c.name} (${c.slug})${colors} → ${c.docsUrl}`);
+        }
+        console.log("");
+      }
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-setup": {
+      console.log(JSON.stringify(getCatalystSetupGuide(), null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-component": {
+      const slug = opts._query || args[1] || opts.slug;
+      if (!slug) {
+        console.error("Usage: catalyst-component <slug>");
+        process.exit(1);
+      }
+      const c = getCatalystComponent(slug);
+      if (!c) {
+        console.error(`Unknown component '${slug}'. Try: list-catalyst`);
+        process.exit(1);
+      }
+      console.log(JSON.stringify(c, null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "catalyst-customizations": {
+      console.log(JSON.stringify(listCatalystCustomizations(), null, 2));
+      process.exit(0);
+      break;
+    }
+
+    case "generate-ui-kit": {
+      const out = opts.out;
+      if (!out) {
+        console.error("Usage: generate-ui-kit --out=./my-kit [--name=my-kit] [--router=next] [--brand=indigo]");
+        process.exit(1);
+      }
+      const result = generateCatalystUiKit({
+        outDir: out,
+        name: opts.name,
+        lang: (opts.lang as "typescript" | "javascript") || "typescript",
+        router: (opts.router as "next" | "remix" | "inertia" | "plain") || "next",
+        brandColor: opts.brand || "indigo",
+        force: opts.force === "true",
+      });
+      console.log(`\nScaffolded Catalyst UI kit at ${result.outDir}`);
+      console.log(`Files: ${result.filesWritten.length}`);
+      console.log("\nNext steps:");
+      for (const s of result.nextSteps) console.log(`  - ${s}`);
       process.exit(0);
       break;
     }
@@ -224,7 +367,7 @@ async function main() {
       const blockSlug = opts.block;
       const variantSlug = opts.variant;
       const format = (opts.format || "react") as CodeFormat;
-      const version = (opts.version || "v4.1") as TailwindVersion;
+      const version = (opts.version || "v4") as TailwindVersion;
       const theme = (opts.theme || "light") as Theme;
 
       if (!category || !blockSlug || !variantSlug) {
@@ -312,21 +455,47 @@ async function main() {
         includeVariants: true,
       });
 
-      if (results.length === 0) {
+      const q = query.toLowerCase();
+      const productHits: Array<{ type: string; name: string; slug: string; url: string }> = [];
+      for (const t of TEMPLATES) {
+        const hay = `${t.name} ${t.tagline} ${t.description} ${t.slug}`.toLowerCase();
+        if (hay.includes(q) || q.split(/\s+/).every((w) => hay.includes(w))) {
+          productHits.push({ type: t.kind, name: t.name, slug: t.slug, url: t.url });
+        }
+      }
+      for (const c of CATALYST_COMPONENTS) {
+        const hay = `${c.name} ${c.slug} ${c.group}`.toLowerCase();
+        if (hay.includes(q)) {
+          productHits.push({ type: "catalyst", name: c.name, slug: c.slug, url: c.docsUrl });
+        }
+      }
+
+      if (results.length === 0 && productHits.length === 0) {
         console.log(`No results found for "${query}"`);
         process.exit(0);
       }
 
       console.log(`\n=== Search Results for "${query}" ===\n`);
-      for (const result of results) {
-        if (result.type === "block") {
-          console.log(`[block] ${result.blockName} (${result.category}/${result.block})`);
-          console.log(`        ${result.variantCount} variants, relevance: ${(result.relevance * 100).toFixed(0)}%`);
-        } else {
-          console.log(`[variant] ${result.variantName} in ${result.blockName}`);
-          console.log(`          ${result.category}/${result.block}/${result.variant}, relevance: ${(result.relevance * 100).toFixed(0)}%`);
+      if (productHits.length) {
+        console.log("-- Products --");
+        for (const p of productHits) {
+          console.log(`[${p.type}] ${p.name} (${p.slug})`);
+          console.log(`         ${p.url}`);
+          console.log("");
         }
-        console.log("");
+      }
+      if (results.length) {
+        console.log("-- UI Blocks --");
+        for (const result of results) {
+          if (result.type === "block") {
+            console.log(`[block] ${result.blockName} (${result.category}/${result.block})`);
+            console.log(`        ${result.variantCount} variants, relevance: ${(result.relevance * 100).toFixed(0)}%`);
+          } else {
+            console.log(`[variant] ${result.variantName} in ${result.blockName}`);
+            console.log(`          ${result.category}/${result.block}/${result.variant}, relevance: ${(result.relevance * 100).toFixed(0)}%`);
+          }
+          console.log("");
+        }
       }
       process.exit(0);
       break;
@@ -345,7 +514,7 @@ async function main() {
       const metadataOnly = opts["metadata-only"] === "true";
       const verbose = opts.verbose === "true";
       const formats: CodeFormat[] = metadataOnly ? [] : ["react", "vue", "html"];
-      const versions: TailwindVersion[] = metadataOnly ? [] : ["v4.1", "v3.4"];
+      const versions: TailwindVersion[] = metadataOnly ? [] : ["v4", "v3.4"];
       const theme: Theme = "light";
 
       // Browser recycling config - recycle every N blocks to free memory
@@ -437,7 +606,7 @@ async function main() {
               if (!metadataOnly) {
                 for (const v of existingBlock.variants) {
                   for (const format of ["react", "vue", "html"] as CodeFormat[]) {
-                    for (const version of ["v4.1", "v3.4"] as TailwindVersion[]) {
+                    for (const version of ["v4", "v3.4"] as TailwindVersion[]) {
                       if (!cacheManager.hasVariant(entry.category, entry.slug, v.slug, format, theme, version)) {
                         allCodeCached = false;
                         break;

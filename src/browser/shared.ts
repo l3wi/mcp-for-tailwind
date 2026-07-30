@@ -4,6 +4,7 @@
 
 /**
  * Parse npm package dependencies from code.
+ * Also detects Tailwind Plus Elements script references in HTML.
  */
 export function parseDependencies(code: string): string[] {
   const deps = new Set<string>();
@@ -18,6 +19,15 @@ export function parseDependencies(code: string): string[] {
         : pkg.split("/")[0];
       if (pkgName) deps.add(pkgName);
     }
+  }
+
+  // CDN / script style references
+  if (
+    code.includes("@tailwindplus/elements") ||
+    code.includes("tailwindplus/elements") ||
+    /el-[a-z][\w-]*/.test(code)
+  ) {
+    deps.add("@tailwindplus/elements");
   }
 
   return Array.from(deps);
